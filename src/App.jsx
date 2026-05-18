@@ -4,8 +4,13 @@ import {
   MapPinned, Wallet, Camera, Utensils, ShoppingBag, Train, Bed, MoreHorizontal,
   Navigation, Users, User, ArrowRight, Scale
 } from 'lucide-react';
+import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { db } from './firebase';
 
-const STORAGE_KEY = 'hokkaido_spring_2026_v2';
+// 房號:你和媽媽用同一個房號就會看到同一份資料
+// 之後若想換新的雲端資料,改這個字串即可(例如改成 'hokkaido_2027')
+const ROOM_ID = 'hokkaido_2026';
+const STORAGE_KEY = 'hokkaido_spring_2026_v2'; // 保留作為離線快取備援
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
 const PEOPLE = ['靜宜', '阿鳳'];
 
@@ -894,17 +899,9 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
   );
 }
 
-function StatusPill({ status, editMode }) {
-  if (!editMode) {
-    return (
-      <div className="text-xs text-stone-400 flex items-center gap-1 shrink-0">
-        <Cloud size={12} />
-        即時同步
-      </div>
-    );
-  }
+function StatusPill({ status }) {
   const map = {
-    loading: { icon: <Cloud size={12} />, text: '載入中', cls: 'text-stone-400' },
+    loading: { icon: <Cloud size={12} />, text: '連線中', cls: 'text-stone-400' },
     saving: { icon: <Cloud size={12} className="animate-pulse" />, text: '儲存中', cls: 'text-amber-600' },
     synced: { icon: <Cloud size={12} />, text: '已同步', cls: 'text-emerald-600' },
     offline: { icon: <CloudOff size={12} />, text: '離線', cls: 'text-rose-500' },
@@ -979,13 +976,55 @@ export default function App() {
       if (raw) {
         setData(migrateData(JSON.parse(raw)));
       }
-      setStatus('synced');
     } catch (e) {
-      setStatus('synced');
+      // 本地讀取失敗,等雲端來
     }
   };
 
+  // 啟動時先載本地快取(秒開、避免空白),雲端來了會自動覆蓋
   useEffect(() => { loadData(); }, []);
+
+  // ===== Firebase 即時同步 =====
+  // 用 ref 來分辨「資料變動是雲端推來的」還是「自己改的」,避免迴圈寫入
+  const skipNextSave = useRef(false);
+  const isInitialLoad = useRef(true);
+
+  // 監聽 Firestore 的房間資料,任何一邊有改動就會自動推到所有裝置
+  useEffect(() => {
+    const docRef = doc(db, 'rooms', ROOM_ID);
+    const unsub = onSnapshot(
+      docRef,
+      (snap) => {
+        if (snap.exists()) {
+          const cloudData = snap.data();
+          skipNextSave.current = true; // 標記:這次更新是雲端推來的,不要再回寫雲端
+          setData(migrateData(cloudData));
+          setStatus('synced');
+          // 同時更新本地快取,離線時還能看
+          try { localStorage.setItem(STORAGE_KEY, JSON.stringify(cloudData)); } catch (e) {}
+        } else if (isInitialLoad.current) {
+          // 雲端還沒有資料(第一次使用),把預設資料/本地資料推上去當初始值
+          const initial = (() => {
+            try {
+              const raw = localStorage.getItem(STORAGE_KEY);
+              return raw ? migrateData(JSON.parse(raw)) : DEFAULT_DATA;
+            } catch (e) {
+              return DEFAULT_DATA;
+            }
+          })();
+          setDoc(docRef, { ...initial, lastUpdate: Date.now() })
+            .then(() => setStatus('synced'))
+            .catch(() => setStatus('offline'));
+        }
+        isInitialLoad.current = false;
+      },
+      (err) => {
+        console.error('Firestore 監聽錯誤:', err);
+        setStatus('offline');
+      }
+    );
+    return () => unsub();
+  }, []);
 
   useEffect(() => {
     const ti = getDayIndex(data.trip.startDate);
@@ -1000,15 +1039,24 @@ export default function App() {
   const saveData = (next) => {
     const updated = { ...next, lastUpdate: Date.now() };
     setData(updated);
+
+    // 如果這次的 setData 是被雲端推來觸發的,不要回寫(避免迴圈)
+    if (skipNextSave.current) {
+      skipNextSave.current = false;
+      return;
+    }
+
     setStatus('saving');
+    // 同步寫入本地快取(即時)+ debounce 寫入雲端(400ms 內多次編輯合併成一次寫入)
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(updated)); } catch (e) {}
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-        setStatus('synced');
-      } catch (e) {
-        setStatus('offline');
-      }
+      setDoc(doc(db, 'rooms', ROOM_ID), updated)
+        .then(() => setStatus('synced'))
+        .catch((err) => {
+          console.error('Firestore 寫入失敗:', err);
+          setStatus('offline');
+        });
     }, 400);
   };
 
@@ -1079,7 +1127,7 @@ export default function App() {
                 </span>
               </div>
             </div>
-            <StatusPill status={status} editMode={editMode} />
+            <StatusPill status={status} />
           </div>
 
           {inTrip && !editMode && (
