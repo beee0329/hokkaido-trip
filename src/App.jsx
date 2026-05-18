@@ -152,17 +152,30 @@ const DEFAULT_DATA = {
   lastUpdate: Date.now(),
 };
 
+// 行前花費用特殊 dayIndex,跟「Day N」共存於同一陣列
+const PRE_TRIP_INDEX = -1;
+
 function migrateExpense(e) {
+  // 幣別處理:舊資料沒有 currency 一律當 JPY
+  // amount 統一為「換算成日幣後的數字」(用記帳當下的匯率,固定下來)
+  // originalAmount + currency 則是「使用者原本輸入的幣別跟金額」
+  const currency = e.currency || 'JPY';
+  const amount = Number(e.amount) || 0; // 一律是日幣
+  const originalAmount = Number(e.originalAmount) || amount; // 顯示用的原始金額
+  const fxAtEntry = Number(e.fxAtEntry) || 0.22; // 記帳當下的匯率(JPY → TWD)
   return {
     id: e.id || newId(),
-    dayIndex: e.dayIndex ?? 0,
+    dayIndex: e.dayIndex ?? 0, // -1 代表行前
     category: e.category || '其他',
-    amount: Number(e.amount) || 0,
+    amount, // 內部一律以日幣計算
     note: e.note || '',
     createdAt: e.createdAt || Date.now(),
     paidBy: e.paidBy || PEOPLE[0],
     splitMode: e.splitMode || 'shared',
-    payMethod: e.payMethod || 'cash', // 預設現金,舊資料沒有這欄位的視為現金
+    payMethod: e.payMethod || 'cash',
+    currency,
+    originalAmount,
+    fxAtEntry,
   };
 }
 
@@ -610,35 +623,52 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
   const [paidBy, setPaidBy] = useState(PEOPLE[0]);
   const [splitMode, setSplitMode] = useState('shared');
   const [payMethod, setPayMethod] = useState('cash');
+  const [currency, setCurrency] = useState('JPY'); // JPY 或 TWD
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
 
   const people = data.people && data.people.length === 2 ? data.people : PEOPLE;
+  const fxRate = data.fxRate || 0.22; // JPY → TWD 的比率(0.22 表示 1 日幣 ≈ 0.22 台幣)
 
   useEffect(() => {
     const ti = getDayIndex(data.trip.startDate);
     setDay(ti >= 0 && ti < data.days.length ? ti : 0);
   }, [data.trip.startDate, data.days.length]);
 
+  // 把使用者輸入的金額換算成日幣(內部統一用日幣計算結算)
+  // TWD 1000 / 0.22 = JPY 4545
+  const previewJpy = (() => {
+    const n = Number(amount);
+    if (!n || n <= 0) return 0;
+    return currency === 'TWD' ? Math.round(n / fxRate) : Math.round(n);
+  })();
+
   const submit = () => {
     const n = Number(amount);
     if (!n || n <= 0) return;
+    // 一律換算成日幣存進去,但保留原始幣別/金額/匯率作為顯示用
+    const jpyAmount = currency === 'TWD' ? Math.round(n / fxRate) : Math.round(n);
     onAdd({
       id: newId(),
       dayIndex: day,
       category,
-      amount: n,
+      amount: jpyAmount, // 內部以日幣計算
       note: note.trim(),
       createdAt: Date.now(),
       paidBy,
       splitMode,
       payMethod,
+      currency,
+      originalAmount: Math.round(n),
+      fxAtEntry: fxRate, // 記下「記帳當下用的匯率」,以後即使總匯率改了,歷史紀錄不變
     });
     setAmount('');
     setNote('');
   };
 
   const grandTotal = data.expenses.reduce((s, e) => s + e.amount, 0);
+  // 行前花費總額(dayIndex === -1)
+  const preTripTotal = data.expenses.filter((e) => e.dayIndex === PRE_TRIP_INDEX).reduce((s, e) => s + e.amount, 0);
   const dayTotals = data.days.map((_, i) =>
     data.expenses.filter((e) => e.dayIndex === i).reduce((s, e) => s + e.amount, 0)
   );
@@ -789,6 +819,12 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
         <div className="text-sm font-medium text-stone-700 mb-3">記一筆</div>
 
         <div className="flex gap-1 overflow-x-auto mb-3 pb-1" style={{ scrollbarWidth: 'none' }}>
+          <button
+            onClick={() => setDay(PRE_TRIP_INDEX)}
+            className={`shrink-0 px-2.5 py-1 rounded-md text-xs ${day === PRE_TRIP_INDEX ? 'bg-stone-800 text-white' : 'bg-stone-50 text-stone-500'}`}
+          >
+            行前
+          </button>
           {data.days.map((_, i) => (
             <button
               key={i}
@@ -876,16 +912,40 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
           </div>
         </div>
 
-        <div className="flex items-center bg-stone-50 rounded-lg px-3 mb-3">
-          <span className="text-stone-400 mr-1">¥</span>
-          <input
-            type="number"
-            inputMode="numeric"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            placeholder="金額"
-            className="bg-transparent py-2 flex-1 tabular-nums focus:outline-none"
-          />
+        {/* 金額輸入:可切 JPY/TWD,輸入 TWD 會即時顯示換算後的日幣 */}
+        <div className="mb-3">
+          <div className="flex items-stretch gap-2">
+            <div className="flex bg-stone-50 rounded-lg p-0.5 shrink-0">
+              <button
+                onClick={() => setCurrency('JPY')}
+                className={`px-2.5 rounded-md text-xs font-medium ${currency === 'JPY' ? 'bg-stone-800 text-white' : 'text-stone-500'}`}
+              >
+                ¥ JPY
+              </button>
+              <button
+                onClick={() => setCurrency('TWD')}
+                className={`px-2.5 rounded-md text-xs font-medium ${currency === 'TWD' ? 'bg-stone-800 text-white' : 'text-stone-500'}`}
+              >
+                NT$ TWD
+              </button>
+            </div>
+            <div className="flex items-center bg-stone-50 rounded-lg px-3 flex-1">
+              <span className="text-stone-400 mr-1">{currency === 'TWD' ? 'NT$' : '¥'}</span>
+              <input
+                type="number"
+                inputMode="numeric"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                placeholder="金額"
+                className="bg-transparent py-2 flex-1 tabular-nums focus:outline-none min-w-0"
+              />
+            </div>
+          </div>
+          {currency === 'TWD' && previewJpy > 0 && (
+            <div className="text-[10px] text-stone-400 mt-1.5 px-1 tabular-nums">
+              ≈ ¥{previewJpy.toLocaleString()}(以匯率 {fxRate} 換算,結算用)
+            </div>
+          )}
         </div>
         <input
           type="text"
@@ -899,75 +959,109 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
           disabled={!amount || Number(amount) <= 0}
           className="w-full py-2.5 rounded-lg text-sm font-medium text-white bg-stone-800 hover:bg-stone-900 active:bg-black disabled:bg-stone-300"
         >
-          記一筆 + ¥{amount || 0}
+          記一筆 + {currency === 'TWD' ? 'NT$' : '¥'}{amount || 0}
         </button>
       </div>
 
-      {/* Expense list grouped by day */}
+      {/* Expense list grouped by day (含行前獨立區塊) */}
       <div className="space-y-3">
-        {data.days.map((_, di) => {
-          const dayExps = data.expenses.filter((e) => e.dayIndex === di).sort((a, b) => b.createdAt - a.createdAt);
-          if (dayExps.length === 0) return null;
-          return (
-            <div key={di} className="bg-white rounded-2xl p-4 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.06)]">
-              <div className="flex items-baseline justify-between mb-3">
-                <div>
-                  <span className="text-sm font-medium text-stone-700">Day {di + 1}</span>
-                  <span className="ml-2 text-xs text-stone-400 tabular-nums">{formatDateDM(data.trip.startDate, di)}</span>
+        {(() => {
+          // 把「行前」當成 dayIndex = -1 的特殊區塊,放在 Day 1 之前
+          const preTripExps = data.expenses.filter((e) => e.dayIndex === PRE_TRIP_INDEX).sort((a, b) => b.createdAt - a.createdAt);
+
+          // 渲染單一筆記帳的小函式(行前和 Day N 共用)
+          const renderExpRow = (exp) => {
+            const cat = CATEGORIES[exp.category];
+            const isFirst = exp.paidBy === people[0];
+            const personBg = isFirst ? '#FBE9DD' : '#E8E2F5';
+            const personColor = isFirst ? '#9A4A20' : '#5340A0';
+            const pm = PAY_METHODS[exp.payMethod || 'cash'];
+            const PmIcon = pm.icon;
+            const isTWD = exp.currency === 'TWD';
+            return (
+              <div key={exp.id} className="flex items-center gap-2 flex-wrap">
+                <span className="w-2 h-2 rounded-full shrink-0" style={{ background: cat.dot }} />
+                <span className="text-xs px-1.5 py-0.5 rounded font-medium shrink-0" style={{ background: cat.bg, color: cat.color }}>
+                  {exp.category}
+                </span>
+                <span
+                  className="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 inline-flex items-center gap-0.5"
+                  style={{ background: personBg, color: personColor }}
+                >
+                  <User size={9} strokeWidth={2.4} />
+                  {exp.paidBy || people[0]}
+                </span>
+                <span
+                  className="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 inline-flex items-center gap-0.5"
+                  style={{ background: pm.bg, color: pm.color }}
+                  title={pm.label}
+                >
+                  <PmIcon size={9} strokeWidth={2.4} />
+                  {pm.label}
+                </span>
+                {exp.splitMode === 'shared' ? (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 inline-flex items-center gap-0.5 bg-stone-100 text-stone-600">
+                    <Users size={9} strokeWidth={2.4} />
+                    共同
+                  </span>
+                ) : (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 bg-stone-50 text-stone-400">
+                    個人
+                  </span>
+                )}
+                <span className="text-sm text-stone-700 flex-1 min-w-0 truncate">{exp.note || '—'}</span>
+                <div className="text-right shrink-0">
+                  <div className="text-sm tabular-nums text-stone-700 font-medium">
+                    {isTWD ? `NT$${(exp.originalAmount || 0).toLocaleString()}` : `¥${exp.amount.toLocaleString()}`}
+                  </div>
+                  {isTWD && (
+                    <div className="text-[10px] text-stone-400 tabular-nums">≈ ¥{exp.amount.toLocaleString()}</div>
+                  )}
                 </div>
-                <span className="text-sm tabular-nums text-stone-600 font-medium">¥{dayTotals[di].toLocaleString()}</span>
+                <button onClick={() => onRemove(exp.id)} className="text-stone-300 hover:text-rose-500" aria-label="刪除">
+                  <Trash2 size={12} />
+                </button>
               </div>
-              <div className="space-y-2">
-                {dayExps.map((exp) => {
-                  const cat = CATEGORIES[exp.category];
-                  const isFirst = exp.paidBy === people[0];
-                  const personBg = isFirst ? '#FBE9DD' : '#E8E2F5';
-                  const personColor = isFirst ? '#9A4A20' : '#5340A0';
-                  const pm = PAY_METHODS[exp.payMethod || 'cash'];
-                  const PmIcon = pm.icon;
-                  return (
-                    <div key={exp.id} className="flex items-center gap-2 flex-wrap">
-                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: cat.dot }} />
-                      <span className="text-xs px-1.5 py-0.5 rounded font-medium shrink-0" style={{ background: cat.bg, color: cat.color }}>
-                        {exp.category}
-                      </span>
-                      <span
-                        className="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 inline-flex items-center gap-0.5"
-                        style={{ background: personBg, color: personColor }}
-                      >
-                        <User size={9} strokeWidth={2.4} />
-                        {exp.paidBy || people[0]}
-                      </span>
-                      <span
-                        className="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 inline-flex items-center gap-0.5"
-                        style={{ background: pm.bg, color: pm.color }}
-                        title={pm.label}
-                      >
-                        <PmIcon size={9} strokeWidth={2.4} />
-                        {pm.label}
-                      </span>
-                      {exp.splitMode === 'shared' ? (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 inline-flex items-center gap-0.5 bg-stone-100 text-stone-600">
-                          <Users size={9} strokeWidth={2.4} />
-                          共同
-                        </span>
-                      ) : (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 bg-stone-50 text-stone-400">
-                          個人
-                        </span>
-                      )}
-                      <span className="text-sm text-stone-700 flex-1 min-w-0 truncate">{exp.note || '—'}</span>
-                      <span className="text-sm tabular-nums text-stone-700 font-medium shrink-0">¥{exp.amount.toLocaleString()}</span>
-                      <button onClick={() => onRemove(exp.id)} className="text-stone-300 hover:text-rose-500" aria-label="刪除">
-                        <Trash2 size={12} />
-                      </button>
+            );
+          };
+
+          return (
+            <>
+              {/* 行前花費區塊(放最上面) */}
+              {preTripExps.length > 0 && (
+                <div className="bg-white rounded-2xl p-4 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.06)] border-2 border-dashed border-stone-200">
+                  <div className="flex items-baseline justify-between mb-3">
+                    <div className="flex items-center gap-1.5">
+                      <Plus size={13} className="text-stone-400" />
+                      <span className="text-sm font-medium text-stone-700">行前</span>
+                      <span className="text-[10px] text-stone-400">機票・住宿・KLOOK 等</span>
                     </div>
-                  );
-                })}
-              </div>
-            </div>
+                    <span className="text-sm tabular-nums text-stone-600 font-medium">¥{preTripTotal.toLocaleString()}</span>
+                  </div>
+                  <div className="space-y-2">{preTripExps.map(renderExpRow)}</div>
+                </div>
+              )}
+
+              {/* Day 1 ~ Day N */}
+              {data.days.map((_, di) => {
+                const dayExps = data.expenses.filter((e) => e.dayIndex === di).sort((a, b) => b.createdAt - a.createdAt);
+                if (dayExps.length === 0) return null;
+                return (
+                  <div key={di} className="bg-white rounded-2xl p-4 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.06)]">
+                    <div className="flex items-baseline justify-between mb-3">
+                      <div>
+                        <span className="text-sm font-medium text-stone-700">Day {di + 1}</span>
+                        <span className="ml-2 text-xs text-stone-400 tabular-nums">{formatDateDM(data.trip.startDate, di)}</span>
+                      </div>
+                      <span className="text-sm tabular-nums text-stone-600 font-medium">¥{dayTotals[di].toLocaleString()}</span>
+                    </div>
+                    <div className="space-y-2">{dayExps.map(renderExpRow)}</div>
+                  </div>
+                );
+              })}
+            </>
           );
-        })}
+        })()}
         {data.expenses.length === 0 && (
           <div className="text-center text-sm text-stone-400 py-8">還沒有任何花費紀錄</div>
         )}
@@ -1156,10 +1250,14 @@ export default function App() {
   const removeDay = (i) => {
     if (data.days.length <= 1) return; // 至少留一天
     const days = data.days.filter((_, idx) => idx !== i);
-    // 也要把該天的記帳挪走或刪除——這裡選擇刪除該天的記帳
+    // 也要把該天的記帳刪除——但行前花費(dayIndex = -1)不受影響
     const expenses = data.expenses
       .filter((e) => e.dayIndex !== i)
-      .map((e) => ({ ...e, dayIndex: e.dayIndex > i ? e.dayIndex - 1 : e.dayIndex }));
+      .map((e) => {
+        // 只調整正數 dayIndex,行前的 -1 保持不變
+        if (e.dayIndex > i) return { ...e, dayIndex: e.dayIndex - 1 };
+        return e;
+      });
     saveData({ ...data, days, expenses });
     setSelectedDay(Math.min(i, days.length - 1));
   };
