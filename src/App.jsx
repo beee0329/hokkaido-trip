@@ -2,9 +2,9 @@ import { useState, useEffect, useRef } from 'react';
 import {
   Plus, Trash2, Pencil, Eye, Cloud, CloudOff, MapPin, Phone, Check,
   MapPinned, Wallet, Camera, Utensils, ShoppingBag, Train, Bed, MoreHorizontal,
-  Navigation, Users, User, ArrowRight, Scale
+  Navigation, Users, User, ArrowRight, Scale, Banknote, CreditCard, Smartphone
 } from 'lucide-react';
-import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
 import { db } from './firebase';
 
 // 房號:你和媽媽用同一個房號就會看到同一份資料
@@ -24,6 +24,15 @@ const CATEGORIES = {
 };
 const CATEGORY_KEYS = Object.keys(CATEGORIES);
 const EXPENSE_CATEGORIES = ['餐點', '交通', '住宿', '購物', '景點', '其他'];
+
+// 付款方式:現金 / 信用卡 / Suica
+// 用顏色區分,出國回來對帳一目了然(信用卡看月結單、現金算手上、Suica 算儲值)
+const PAY_METHODS = {
+  cash: { label: '現金', icon: Banknote, color: '#7C5E3C', bg: '#F4EDDF' },
+  credit: { label: '信用卡', icon: CreditCard, color: '#2F5F8C', bg: '#E1ECF7' },
+  suica: { label: 'Suica', icon: Smartphone, color: '#1F7A4D', bg: '#DEF1E5' },
+};
+const PAY_METHOD_KEYS = Object.keys(PAY_METHODS);
 
 const newId = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
@@ -153,6 +162,7 @@ function migrateExpense(e) {
     createdAt: e.createdAt || Date.now(),
     paidBy: e.paidBy || PEOPLE[0],
     splitMode: e.splitMode || 'shared',
+    payMethod: e.payMethod || 'cash', // 預設現金,舊資料沒有這欄位的視為現金
   };
 }
 
@@ -599,6 +609,7 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
   const [category, setCategory] = useState('餐點');
   const [paidBy, setPaidBy] = useState(PEOPLE[0]);
   const [splitMode, setSplitMode] = useState('shared');
+  const [payMethod, setPayMethod] = useState('cash');
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
 
@@ -621,6 +632,7 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
       createdAt: Date.now(),
       paidBy,
       splitMode,
+      payMethod,
     });
     setAmount('');
     setNote('');
@@ -632,6 +644,11 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
   );
   const catTotals = EXPENSE_CATEGORIES.reduce((acc, c) => {
     acc[c] = data.expenses.filter((e) => e.category === c).reduce((s, e) => s + e.amount, 0);
+    return acc;
+  }, {});
+  // 按付款方式分類加總(看每種付款方式總共花了多少,出國回來對帳用)
+  const payTotals = PAY_METHOD_KEYS.reduce((acc, k) => {
+    acc[k] = data.expenses.filter((e) => (e.payMethod || 'cash') === k).reduce((s, e) => s + e.amount, 0);
     return acc;
   }, {});
   const twdEstimate = Math.round(grandTotal * (data.fxRate || 0.22));
@@ -695,6 +712,30 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
                 </div>
               );
             })}
+          </div>
+        )}
+
+        {/* 按付款方式統計:出國回來對帳一目了然 */}
+        {grandTotal > 0 && (
+          <div className="mt-4 pt-3 border-t border-stone-100">
+            <div className="text-[10px] text-stone-500 mb-2">按付款方式</div>
+            <div className="grid grid-cols-3 gap-2">
+              {PAY_METHOD_KEYS.map((k) => {
+                const pm = PAY_METHODS[k];
+                const Icon = pm.icon;
+                const amt = payTotals[k];
+                return (
+                  <div key={k} className="rounded-lg p-2" style={{ background: pm.bg }}>
+                    <div className="text-[10px] inline-flex items-center gap-1" style={{ color: pm.color }}>
+                      <Icon size={10} strokeWidth={2.4} /> {pm.label}
+                    </div>
+                    <div className="text-xs font-medium tabular-nums mt-0.5" style={{ color: pm.color }}>
+                      ¥{amt.toLocaleString()}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
       </div>
@@ -809,6 +850,32 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
           </div>
         </div>
 
+        {/* 付款方式 */}
+        <div className="mb-3 bg-stone-50 rounded-lg p-2">
+          <div className="text-[10px] text-stone-500 mb-1.5 px-1">付款方式</div>
+          <div className="flex gap-1.5 flex-wrap">
+            {PAY_METHOD_KEYS.map((k) => {
+              const pm = PAY_METHODS[k];
+              const Icon = pm.icon;
+              const active = payMethod === k;
+              return (
+                <button
+                  key={k}
+                  onClick={() => setPayMethod(k)}
+                  className="px-2.5 py-1 rounded-full text-xs font-medium inline-flex items-center gap-1"
+                  style={{
+                    background: active ? pm.color : 'white',
+                    color: active ? 'white' : pm.color,
+                  }}
+                >
+                  <Icon size={11} strokeWidth={2.4} />
+                  {pm.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         <div className="flex items-center bg-stone-50 rounded-lg px-3 mb-3">
           <span className="text-stone-400 mr-1">¥</span>
           <input
@@ -856,6 +923,8 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
                   const isFirst = exp.paidBy === people[0];
                   const personBg = isFirst ? '#FBE9DD' : '#E8E2F5';
                   const personColor = isFirst ? '#9A4A20' : '#5340A0';
+                  const pm = PAY_METHODS[exp.payMethod || 'cash'];
+                  const PmIcon = pm.icon;
                   return (
                     <div key={exp.id} className="flex items-center gap-2 flex-wrap">
                       <span className="w-2 h-2 rounded-full shrink-0" style={{ background: cat.dot }} />
@@ -868,6 +937,14 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
                       >
                         <User size={9} strokeWidth={2.4} />
                         {exp.paidBy || people[0]}
+                      </span>
+                      <span
+                        className="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 inline-flex items-center gap-0.5"
+                        style={{ background: pm.bg, color: pm.color }}
+                        title={pm.label}
+                      >
+                        <PmIcon size={9} strokeWidth={2.4} />
+                        {pm.label}
                       </span>
                       {exp.splitMode === 'shared' ? (
                         <span className="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 inline-flex items-center gap-0.5 bg-stone-100 text-stone-600">
@@ -1086,8 +1163,41 @@ export default function App() {
     saveData({ ...data, days, expenses });
     setSelectedDay(Math.min(i, days.length - 1));
   };
-  const addExpense = (exp) => saveData({ ...data, expenses: [...data.expenses, exp] });
-  const removeExpense = (id) => saveData({ ...data, expenses: data.expenses.filter((e) => e.id !== id) });
+  // 記帳用 Firestore 原子操作:直接 append/remove,不會覆蓋其他裝置的同時寫入
+  const addExpense = (exp) => {
+    // 立刻更新本地畫面(樂觀更新),不等雲端
+    const newExpenses = [...data.expenses, exp];
+    setData({ ...data, expenses: newExpenses, lastUpdate: Date.now() });
+    setStatus('saving');
+    // 用 arrayUnion 直接 append 這一筆到雲端,不會碰其他人加的紀錄
+    skipNextSave.current = true; // 等下 onSnapshot 推回來時不要再回寫
+    updateDoc(doc(db, 'rooms', ROOM_ID), {
+      expenses: arrayUnion(exp),
+      lastUpdate: Date.now(),
+    })
+      .then(() => setStatus('synced'))
+      .catch((err) => {
+        console.error('addExpense 寫入失敗:', err);
+        setStatus('offline');
+      });
+  };
+  const removeExpense = (id) => {
+    const target = data.expenses.find((e) => e.id === id);
+    if (!target) return;
+    const newExpenses = data.expenses.filter((e) => e.id !== id);
+    setData({ ...data, expenses: newExpenses, lastUpdate: Date.now() });
+    setStatus('saving');
+    skipNextSave.current = true;
+    updateDoc(doc(db, 'rooms', ROOM_ID), {
+      expenses: arrayRemove(target),
+      lastUpdate: Date.now(),
+    })
+      .then(() => setStatus('synced'))
+      .catch((err) => {
+        console.error('removeExpense 寫入失敗:', err);
+        setStatus('offline');
+      });
+  };
   const updateFx = (rate) => saveData({ ...data, fxRate: rate });
 
   const todayIndex = getDayIndex(data.trip.startDate);
