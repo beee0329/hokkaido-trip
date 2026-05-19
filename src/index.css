@@ -2,7 +2,21 @@
 @tailwind components;
 @tailwind utilities;
 
+/* 主題配色 — 方案 C(湖水藍 + 桃紅 + 淡奶油) */
+/* 標題與內文皆為黑灰系,只在強調色、按鈕、tag 用主題色 */
+:root {
+  --brand-primary: #77CED5;       /* 湖水藍 主色 */
+  --brand-primary-dark: #2A7079;  /* 深湖水藍 文字、深色按鈕用 */
+  --brand-primary-bg: #DFF3F5;    /* 淡湖水藍 卡片底色 */
+  --brand-accent: #FB5185;        /* 桃紅 警示/編輯/刪除 */
+  --brand-accent-dark: #A2143F;   /* 深桃紅 桃紅底上的文字 */
+  --brand-accent-bg: #FFE0EA;     /* 淡粉 警示底色 */
+  --brand-bg: #FDFCF0;            /* 淡奶油 全站背景 */
+  --brand-bg-soft: #FAF8E4;       /* 較深的淡奶油 卡片邊框/分隔線 */
+}
+
 body {
   margin: 0;
   -webkit-font-smoothing: antialiased;
+  background: var(--brand-bg);
 }
