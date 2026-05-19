@@ -497,7 +497,7 @@ function DayContent({ day, dayIndex, totalDays, startDate, onUpdate, onAddDay, o
   };
 
   return (
-    <div>
+    <div className="w-full">
       <div className="mb-5">
         <div className="flex items-baseline gap-3 mb-1 flex-wrap">
           <span className="text-3xl font-extralight tracking-tight text-stone-400 leading-none">Day {dayIndex + 1}</span>
@@ -782,130 +782,7 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
   const settlement = calcSettlement(data.expenses, people);
 
   return (
-    <div>
-      {/* Total summary */}
-      <div className="mb-5 bg-white rounded-2xl p-5 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.06)]">
-        <div className="text-xs text-stone-500 mb-1">旅程總花費</div>
-        <div className="flex items-baseline gap-2">
-          <span className="text-3xl font-light tabular-nums text-stone-800">¥{grandTotal.toLocaleString()}</span>
-          <span className="text-sm text-stone-400 tabular-nums">≈ NT${twdEstimate.toLocaleString()}</span>
-        </div>
-        <div className="mt-3 pt-3 border-t border-stone-100 flex items-center gap-2 text-xs text-stone-500">
-          <span>匯率 JPY → TWD</span>
-          <input
-            type="number"
-            step="0.001"
-            value={data.fxRate}
-            onChange={(e) => onUpdateFx(Number(e.target.value) || 0.22)}
-            className="w-16 px-2 py-0.5 bg-stone-50 rounded text-center tabular-nums"
-          />
-        </div>
-
-        {grandTotal > 0 && (
-          <div className="mt-4 grid grid-cols-2 gap-2">
-            <div className="rounded-lg p-2.5" style={{ background: '#F1EFE8' }}>
-              <div className="text-[10px] text-stone-500 inline-flex items-center gap-1">
-                <Users size={10} /> 共同支出
-              </div>
-              <div className="text-sm font-medium tabular-nums text-stone-700 mt-0.5">¥{sharedTotal.toLocaleString()}</div>
-            </div>
-            <div className="rounded-lg p-2.5" style={{ background: '#F1EFE8' }}>
-              <div className="text-[10px] text-stone-500 inline-flex items-center gap-1">
-                <User size={10} /> 個人支出
-              </div>
-              <div className="text-sm font-medium tabular-nums text-stone-700 mt-0.5">¥{personalTotal.toLocaleString()}</div>
-            </div>
-          </div>
-        )}
-
-        {grandTotal > 0 && (
-          <div className="mt-4 space-y-1.5">
-            {EXPENSE_CATEGORIES.filter((c) => catTotals[c] > 0).map((c) => {
-              const pct = (catTotals[c] / grandTotal) * 100;
-              const cat = CATEGORIES[c];
-              return (
-                <div key={c} className="flex items-center gap-2 text-xs">
-                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: cat.dot }} />
-                  <span className="text-stone-600 w-10">{c}</span>
-                  <div className="flex-1 h-1 bg-stone-100 rounded overflow-hidden">
-                    <div className="h-full rounded" style={{ width: `${pct}%`, background: cat.dot }} />
-                  </div>
-                  <span className="text-stone-500 tabular-nums">¥{catTotals[c].toLocaleString()}</span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* 按付款方式統計:出國回來對帳一目了然 */}
-        {grandTotal > 0 && (
-          <div className="mt-4 pt-3 border-t border-stone-100">
-            <div className="text-[10px] text-stone-500 mb-2">按付款方式</div>
-            <div className="grid grid-cols-3 gap-2">
-              {PAY_METHOD_KEYS.map((k) => {
-                const pm = PAY_METHODS[k];
-                const Icon = pm.icon;
-                const amt = payTotals[k];
-                return (
-                  <div key={k} className="rounded-lg p-2" style={{ background: pm.bg }}>
-                    <div className="text-[10px] inline-flex items-center gap-1" style={{ color: pm.color }}>
-                      <Icon size={10} strokeWidth={2.4} /> {pm.label}
-                    </div>
-                    <div className="text-xs font-medium tabular-nums mt-0.5" style={{ color: pm.color }}>
-                      ¥{amt.toLocaleString()}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Settlement card */}
-      {data.expenses.length > 0 && (
-        <div className="mb-5 bg-white rounded-2xl p-5 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.06)]">
-          <div className="flex items-center gap-1.5 text-sm font-medium text-stone-700 mb-3">
-            <Scale size={14} />
-            結算
-          </div>
-
-          <div className="grid grid-cols-2 gap-2 mb-4">
-            {people.map((p, i) => (
-              <div key={p} className="rounded-lg p-3" style={{ background: i === 0 ? '#FBE9DD' : '#E8E2F5' }}>
-                <div className="text-[10px]" style={{ color: i === 0 ? '#9A4A20' : '#5340A0' }}>
-                  {p} 已付
-                </div>
-                <div className="text-lg font-light tabular-nums mt-0.5" style={{ color: i === 0 ? '#9A4A20' : '#5340A0' }}>
-                  ¥{totalByPerson[i].toLocaleString()}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {sharedTotal === 0 ? (
-            <div className="text-xs text-stone-400 text-center py-2">尚無共同支出,無需結算</div>
-          ) : settlement.settled ? (
-            <div className="text-center text-sm text-emerald-600 font-medium py-2 rounded-lg bg-emerald-50">
-              共同支出已平攤,不用還
-            </div>
-          ) : (
-            <div className="rounded-lg p-3" style={{ background: 'var(--brand-accent-bg)' }}>
-              <div className="text-[10px] mb-1.5" style={{ color: 'var(--brand-accent-dark)' }}>應還金額</div>
-              <div className="flex items-center justify-center gap-2 text-base font-medium text-stone-800 flex-wrap">
-                <PersonPill person={settlement.from} active size="lg" />
-                <ArrowRight size={16} style={{ color: 'var(--brand-accent)' }} />
-                <PersonPill person={settlement.to} active size="lg" />
-                <span className="tabular-nums ml-1">¥{settlement.amount.toLocaleString()}</span>
-              </div>
-              <div className="text-[10px] text-stone-500 mt-2 text-center">
-                共同支出 ¥{settlement.totalShared.toLocaleString()} ÷ 2 = 每人 ¥{Math.round(settlement.eachShare).toLocaleString()}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
+    <div className="w-full pb-32">
       {/* Add expense form */}
       <div className="mb-5 bg-white rounded-2xl p-4 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.06)]">
         <div className="text-sm font-medium text-stone-700 mb-3">記一筆</div>
@@ -1103,6 +980,129 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
           記一筆 + {currency === 'TWD' ? 'NT$' : '¥'}{amount || 0}
         </button>
       </div>
+
+      {/* Total summary */}
+      <div className="mb-5 bg-white rounded-2xl p-5 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.06)]">
+        <div className="text-xs text-stone-500 mb-1">旅程總花費</div>
+        <div className="flex items-baseline gap-2">
+          <span className="text-3xl font-light tabular-nums text-stone-800">¥{grandTotal.toLocaleString()}</span>
+          <span className="text-sm text-stone-400 tabular-nums">≈ NT${twdEstimate.toLocaleString()}</span>
+        </div>
+        <div className="mt-3 pt-3 border-t border-stone-100 flex items-center gap-2 text-xs text-stone-500">
+          <span>匯率 JPY → TWD</span>
+          <input
+            type="number"
+            step="0.001"
+            value={data.fxRate}
+            onChange={(e) => onUpdateFx(Number(e.target.value) || 0.22)}
+            className="w-16 px-2 py-0.5 bg-stone-50 rounded text-center tabular-nums"
+          />
+        </div>
+
+        {grandTotal > 0 && (
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <div className="rounded-lg p-2.5" style={{ background: '#F1EFE8' }}>
+              <div className="text-[10px] text-stone-500 inline-flex items-center gap-1">
+                <Users size={10} /> 共同支出
+              </div>
+              <div className="text-sm font-medium tabular-nums text-stone-700 mt-0.5">¥{sharedTotal.toLocaleString()}</div>
+            </div>
+            <div className="rounded-lg p-2.5" style={{ background: '#F1EFE8' }}>
+              <div className="text-[10px] text-stone-500 inline-flex items-center gap-1">
+                <User size={10} /> 個人支出
+              </div>
+              <div className="text-sm font-medium tabular-nums text-stone-700 mt-0.5">¥{personalTotal.toLocaleString()}</div>
+            </div>
+          </div>
+        )}
+
+        {grandTotal > 0 && (
+          <div className="mt-4 space-y-1.5">
+            {EXPENSE_CATEGORIES.filter((c) => catTotals[c] > 0).map((c) => {
+              const pct = (catTotals[c] / grandTotal) * 100;
+              const cat = CATEGORIES[c];
+              return (
+                <div key={c} className="flex items-center gap-2 text-xs">
+                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: cat.dot }} />
+                  <span className="text-stone-600 w-10">{c}</span>
+                  <div className="flex-1 h-1 bg-stone-100 rounded overflow-hidden">
+                    <div className="h-full rounded" style={{ width: `${pct}%`, background: cat.dot }} />
+                  </div>
+                  <span className="text-stone-500 tabular-nums">¥{catTotals[c].toLocaleString()}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* 按付款方式統計:出國回來對帳一目了然 */}
+        {grandTotal > 0 && (
+          <div className="mt-4 pt-3 border-t border-stone-100">
+            <div className="text-[10px] text-stone-500 mb-2">按付款方式</div>
+            <div className="grid grid-cols-3 gap-2">
+              {PAY_METHOD_KEYS.map((k) => {
+                const pm = PAY_METHODS[k];
+                const Icon = pm.icon;
+                const amt = payTotals[k];
+                return (
+                  <div key={k} className="rounded-lg p-2" style={{ background: pm.bg }}>
+                    <div className="text-[10px] inline-flex items-center gap-1" style={{ color: pm.color }}>
+                      <Icon size={10} strokeWidth={2.4} /> {pm.label}
+                    </div>
+                    <div className="text-xs font-medium tabular-nums mt-0.5" style={{ color: pm.color }}>
+                      ¥{amt.toLocaleString()}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Settlement card */}
+      {data.expenses.length > 0 && (
+        <div className="mb-5 bg-white rounded-2xl p-5 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.06)]">
+          <div className="flex items-center gap-1.5 text-sm font-medium text-stone-700 mb-3">
+            <Scale size={14} />
+            結算
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 mb-4">
+            {people.map((p, i) => (
+              <div key={p} className="rounded-lg p-3" style={{ background: i === 0 ? '#FBE9DD' : '#E8E2F5' }}>
+                <div className="text-[10px]" style={{ color: i === 0 ? '#9A4A20' : '#5340A0' }}>
+                  {p} 已付
+                </div>
+                <div className="text-lg font-light tabular-nums mt-0.5" style={{ color: i === 0 ? '#9A4A20' : '#5340A0' }}>
+                  ¥{totalByPerson[i].toLocaleString()}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {sharedTotal === 0 ? (
+            <div className="text-xs text-stone-400 text-center py-2">尚無共同支出,無需結算</div>
+          ) : settlement.settled ? (
+            <div className="text-center text-sm text-emerald-600 font-medium py-2 rounded-lg bg-emerald-50">
+              共同支出已平攤,不用還
+            </div>
+          ) : (
+            <div className="rounded-lg p-3" style={{ background: 'var(--brand-accent-bg)' }}>
+              <div className="text-[10px] mb-1.5" style={{ color: 'var(--brand-accent-dark)' }}>應還金額</div>
+              <div className="flex items-center justify-center gap-2 text-base font-medium text-stone-800 flex-wrap">
+                <PersonPill person={settlement.from} active size="lg" />
+                <ArrowRight size={16} style={{ color: 'var(--brand-accent)' }} />
+                <PersonPill person={settlement.to} active size="lg" />
+                <span className="tabular-nums ml-1">¥{settlement.amount.toLocaleString()}</span>
+              </div>
+              <div className="text-[10px] text-stone-500 mt-2 text-center">
+                共同支出 ¥{settlement.totalShared.toLocaleString()} ÷ 2 = 每人 ¥{Math.round(settlement.eachShare).toLocaleString()}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Expense list grouped by day (含行前獨立區塊) */}
       <div className="space-y-3">
