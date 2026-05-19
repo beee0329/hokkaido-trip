@@ -466,11 +466,16 @@ function DayContent({ day, dayIndex, totalDays, startDate, onUpdate, onAddDay, o
   const total = day.items.length;
 
   // 算出當天日期(YYYY-MM-DD)用來查天氣
+  // ⚠️ 不能用 toISOString(),那會強制轉成 UTC,在台灣時區會把日期偏移一天
+  // 改用本地時區的年月日組合,確保 Day 1 = startDate 字面上的日期
   const dayDateISO = (() => {
     if (!startDate) return null;
     const d = new Date(startDate + 'T00:00:00');
     d.setDate(d.getDate() + dayIndex);
-    return d.toISOString().slice(0, 10);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
   })();
   const dayWeather = dayDateISO ? weather?.[dayDateISO] : null;
 
