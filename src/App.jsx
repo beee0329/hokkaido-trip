@@ -2,10 +2,12 @@ import { useState, useEffect, useRef } from 'react';
 import {
   Plus, Trash2, Pencil, Eye, Cloud, CloudOff, MapPin, Phone, Check,
   MapPinned, Wallet, Camera, Utensils, ShoppingBag, Train, Bed, MoreHorizontal,
-  Navigation, Users, User, ArrowRight, Scale, Banknote, CreditCard, Smartphone
+  Navigation, Users, User, ArrowRight, Scale, Banknote, CreditCard, Smartphone,
+  PieChart as PieChartIcon, Loader2, Sparkles, X
 } from 'lucide-react';
 import { doc, onSnapshot, setDoc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
 import { db } from './firebase';
+import { recognizeReceipt } from './gemini';
 
 // 房號:你和媽媽用同一個房號就會看到同一份資料
 // 之後若想換新的雲端資料,改這個字串即可(例如改成 'hokkaido_2027')
@@ -627,6 +629,39 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
 
+  // 收據掃描相關狀態
+  const [scanning, setScanning] = useState(false); // 正在辨識中
+  const [scanError, setScanError] = useState(''); // 辨識失敗的錯誤訊息
+  const fileInputRef = useRef(null);
+
+  // 處理使用者選擇/拍照後的收據圖片
+  const handleReceiptPick = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // 清掉 input 的值,讓使用者下次可以選同一張(否則 onChange 不會觸發)
+    e.target.value = '';
+
+    setScanning(true);
+    setScanError('');
+    try {
+      const result = await recognizeReceipt(file);
+      // 把辨識結果填入表單(使用者還可以再修改後送出)
+      if (result.total > 0) setAmount(String(result.total));
+      if (result.category) setCategory(result.category);
+      if (result.currency === 'TWD') setCurrency('TWD');
+      else setCurrency('JPY');
+      // 組備註:店家 · 品項1, 品項2
+      const noteParts = [];
+      if (result.store) noteParts.push(result.store);
+      if (result.items.length > 0) noteParts.push(result.items.join('、'));
+      if (noteParts.length > 0) setNote(noteParts.join(' · '));
+    } catch (err) {
+      setScanError(err.message || '辨識失敗,請手動輸入');
+    } finally {
+      setScanning(false);
+    }
+  };
+
   const people = data.people && data.people.length === 2 ? data.people : PEOPLE;
   const fxRate = data.fxRate || 0.22; // JPY → TWD 的比率(0.22 表示 1 日幣 ≈ 0.22 台幣)
 
@@ -954,6 +989,41 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
           placeholder="備註(例如:六花亭、地下鐵 24h 票)"
           className="w-full bg-stone-50 rounded-lg px-3 py-2 text-sm mb-3 focus:outline-none focus:bg-stone-100"
         />
+        {/* 收據掃描:用 Gemini 自動填表單,使用者送出前還能再改 */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          onChange={handleReceiptPick}
+          className="hidden"
+        />
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={scanning}
+          className="w-full py-2 rounded-lg text-sm font-medium mb-2 border border-dashed border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 disabled:opacity-60 inline-flex items-center justify-center gap-1.5"
+        >
+          {scanning ? (
+            <>
+              <Loader2 size={14} className="animate-spin" />
+              AI 辨識中,大約 2 秒...
+            </>
+          ) : (
+            <>
+              <Sparkles size={14} />
+              拍收據自動填
+            </>
+          )}
+        </button>
+        {scanError && (
+          <div className="mb-2 px-3 py-2 rounded-lg bg-rose-50 text-rose-700 text-xs flex items-start gap-2">
+            <span className="flex-1">{scanError}</span>
+            <button onClick={() => setScanError('')} className="text-rose-400 hover:text-rose-600 shrink-0">
+              <X size={12} />
+            </button>
+          </div>
+        )}
+
         <button
           onClick={submit}
           disabled={!amount || Number(amount) <= 0}
@@ -1070,6 +1140,233 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
   );
 }
 
+// ================================================================
+// PieChart 元件:純 SVG 繪製,不引入額外圖表套件
+// ================================================================
+// segments = [{ label, value, color }, ...]
+// 自動處理 0 值(空圖示);若只有一筆,畫成整圓
+// ================================================================
+function PieChart({ segments, size = 160 }) {
+  const total = segments.reduce((s, x) => s + x.value, 0);
+  const cx = size / 2;
+  const cy = size / 2;
+  const radius = size / 2 - 4;
+
+  if (total <= 0) {
+    return (
+      <div className="flex items-center justify-center" style={{ width: size, height: size }}>
+        <div className="w-32 h-32 rounded-full border-4 border-dashed border-stone-200" />
+      </div>
+    );
+  }
+
+  // 過濾掉值為 0 的 segments
+  const filtered = segments.filter((s) => s.value > 0);
+
+  // 只有一個 segment → 直接畫整圓(SVG arc 在 360 度時會渲染失敗,所以特例處理)
+  if (filtered.length === 1) {
+    return (
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <circle cx={cx} cy={cy} r={radius} fill={filtered[0].color} />
+      </svg>
+    );
+  }
+
+  // 多個 segment → 用 SVG path 畫扇形
+  let cumulative = 0;
+  const paths = filtered.map((seg, i) => {
+    const startAngle = (cumulative / total) * Math.PI * 2 - Math.PI / 2;
+    cumulative += seg.value;
+    const endAngle = (cumulative / total) * Math.PI * 2 - Math.PI / 2;
+
+    const x1 = cx + radius * Math.cos(startAngle);
+    const y1 = cy + radius * Math.sin(startAngle);
+    const x2 = cx + radius * Math.cos(endAngle);
+    const y2 = cy + radius * Math.sin(endAngle);
+
+    const largeArc = endAngle - startAngle > Math.PI ? 1 : 0;
+    const d = `M ${cx} ${cy} L ${x1} ${y1} A ${radius} ${radius} 0 ${largeArc} 1 ${x2} ${y2} Z`;
+    return <path key={i} d={d} fill={seg.color} />;
+  });
+
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      {paths}
+      {/* 中間挖空當 donut style,看起來更精緻 */}
+      <circle cx={cx} cy={cy} r={radius * 0.5} fill="#fff" />
+    </svg>
+  );
+}
+
+// ================================================================
+// AnalyticsView:分析頁
+// ================================================================
+// 兩個圓餅圖:按類別 / 按付款方式
+// 篩選器:時間範圍(全部/行前/旅程中)、分攤類型(全部/共同/個人)、付款人(全部/各自)
+// 響應式:手機上下排,sm: 以上左右排
+// ================================================================
+function AnalyticsView({ data }) {
+  const [rangeFilter, setRangeFilter] = useState('all'); // all | pre | trip
+  const [personFilter, setPersonFilter] = useState('all'); // all | 共同 | 靜宜 | 阿鳳
+
+  const people = data.people && data.people.length === 2 ? data.people : PEOPLE;
+
+  // 套用篩選條件
+  const filteredExps = data.expenses.filter((e) => {
+    // 時間範圍篩選
+    if (rangeFilter === 'pre' && e.dayIndex !== PRE_TRIP_INDEX) return false;
+    if (rangeFilter === 'trip' && e.dayIndex === PRE_TRIP_INDEX) return false;
+    // 付款人/共同篩選
+    if (personFilter === 'shared' && e.splitMode !== 'shared') return false;
+    if (personFilter === people[0] && (e.paidBy !== people[0] || e.splitMode !== 'personal')) return false;
+    if (personFilter === people[1] && (e.paidBy !== people[1] || e.splitMode !== 'personal')) return false;
+    return true;
+  });
+
+  const total = filteredExps.reduce((s, e) => s + e.amount, 0);
+  const twdEstimate = Math.round(total * (data.fxRate || 0.22));
+
+  // 按類別分組
+  const catSegments = EXPENSE_CATEGORIES.map((c) => ({
+    label: c,
+    value: filteredExps.filter((e) => e.category === c).reduce((s, e) => s + e.amount, 0),
+    color: CATEGORIES[c].dot,
+  })).filter((s) => s.value > 0).sort((a, b) => b.value - a.value);
+
+  // 按付款方式分組
+  const payMethodSegments = PAY_METHOD_KEYS.map((k) => ({
+    label: PAY_METHODS[k].label,
+    value: filteredExps.filter((e) => (e.payMethod || 'cash') === k).reduce((s, e) => s + e.amount, 0),
+    color: PAY_METHODS[k].color,
+    icon: PAY_METHODS[k].icon,
+  })).filter((s) => s.value > 0).sort((a, b) => b.value - a.value);
+
+  const rangeOptions = [
+    { id: 'all', label: '全部' },
+    { id: 'pre', label: '行前' },
+    { id: 'trip', label: '旅程中' },
+  ];
+  const personOptions = [
+    { id: 'all', label: '全部' },
+    { id: 'shared', label: '共同' },
+    { id: people[0], label: people[0] },
+    { id: people[1], label: people[1] },
+  ];
+
+  return (
+    <div className="pb-32 pt-2">
+      {/* 總額卡片 */}
+      <div className="mb-4 bg-white rounded-2xl p-5 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.06)]">
+        <div className="text-xs text-stone-500 mb-1">總花費</div>
+        <div className="text-3xl font-light tabular-nums text-stone-800">¥{total.toLocaleString()}</div>
+        <div className="text-xs text-stone-400 mt-1 tabular-nums">≈ NT$ {twdEstimate.toLocaleString()}</div>
+        {filteredExps.length === 0 && (
+          <div className="text-xs text-stone-400 mt-3">目前篩選條件下沒有任何花費紀錄</div>
+        )}
+      </div>
+
+      {/* 篩選器 */}
+      <div className="mb-4 bg-white rounded-2xl p-4 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.06)] space-y-3">
+        <div>
+          <div className="text-[10px] text-stone-500 mb-1.5 px-1">時間範圍</div>
+          <div className="flex gap-1.5 flex-wrap">
+            {rangeOptions.map((opt) => (
+              <button
+                key={opt.id}
+                onClick={() => setRangeFilter(opt.id)}
+                className={`px-2.5 py-1 rounded-full text-xs font-medium ${
+                  rangeFilter === opt.id ? 'bg-stone-800 text-white' : 'bg-stone-50 text-stone-500'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div className="text-[10px] text-stone-500 mb-1.5 px-1">付款對象</div>
+          <div className="flex gap-1.5 flex-wrap">
+            {personOptions.map((opt) => (
+              <button
+                key={opt.id}
+                onClick={() => setPersonFilter(opt.id)}
+                className={`px-2.5 py-1 rounded-full text-xs font-medium ${
+                  personFilter === opt.id ? 'bg-stone-800 text-white' : 'bg-stone-50 text-stone-500'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* 兩個圓餅圖:手機上下排、平板以上左右排 */}
+      <div className="flex flex-col sm:flex-row gap-3">
+        {/* 按類別 */}
+        <div className="flex-1 bg-white rounded-2xl p-4 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.06)]">
+          <div className="text-sm font-medium text-stone-700 mb-3">按類別</div>
+          {catSegments.length > 0 ? (
+            <>
+              <div className="flex justify-center mb-3">
+                <PieChart segments={catSegments} size={180} />
+              </div>
+              <div className="space-y-1.5">
+                {catSegments.map((seg) => {
+                  const pct = (seg.value / total) * 100;
+                  return (
+                    <div key={seg.label} className="flex items-center gap-2 text-xs">
+                      <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: seg.color }} />
+                      <span className="text-stone-700 w-10">{seg.label}</span>
+                      <span className="text-stone-400 tabular-nums w-10">{pct.toFixed(0)}%</span>
+                      <span className="text-stone-600 tabular-nums flex-1 text-right">¥{seg.value.toLocaleString()}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            <div className="text-center text-xs text-stone-400 py-8">沒有資料</div>
+          )}
+        </div>
+
+        {/* 按付款方式 */}
+        <div className="flex-1 bg-white rounded-2xl p-4 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.06)]">
+          <div className="text-sm font-medium text-stone-700 mb-3">按付款方式</div>
+          {payMethodSegments.length > 0 ? (
+            <>
+              <div className="flex justify-center mb-3">
+                <PieChart segments={payMethodSegments} size={180} />
+              </div>
+              <div className="space-y-1.5">
+                {payMethodSegments.map((seg) => {
+                  const pct = (seg.value / total) * 100;
+                  const Icon = seg.icon;
+                  return (
+                    <div key={seg.label} className="flex items-center gap-2 text-xs">
+                      <span
+                        className="w-5 h-5 rounded-full shrink-0 inline-flex items-center justify-center"
+                        style={{ background: seg.color }}
+                      >
+                        <Icon size={10} strokeWidth={2.4} color="white" />
+                      </span>
+                      <span className="text-stone-700 w-12">{seg.label}</span>
+                      <span className="text-stone-400 tabular-nums w-10">{pct.toFixed(0)}%</span>
+                      <span className="text-stone-600 tabular-nums flex-1 text-right">¥{seg.value.toLocaleString()}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            <div className="text-center text-xs text-stone-400 py-8">沒有資料</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StatusPill({ status }) {
   const map = {
     loading: { icon: <Cloud size={12} />, text: '連線中', cls: 'text-stone-400' },
@@ -1090,6 +1387,7 @@ function BottomNav({ view, onChange, editMode, onToggleEdit }) {
   const tabs = [
     { id: 'itinerary', label: '行程', icon: MapPinned },
     { id: 'expense', label: '記帳', icon: Wallet },
+    { id: 'analytics', label: '分析', icon: PieChartIcon },
   ];
   return (
     <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-stone-200/70 bg-white/95 backdrop-blur-md">
@@ -1360,6 +1658,9 @@ export default function App() {
         )}
         {view === 'expense' && (
           <ExpenseView data={data} onAdd={addExpense} onRemove={removeExpense} onUpdateFx={updateFx} />
+        )}
+        {view === 'analytics' && (
+          <AnalyticsView data={data} />
         )}
 
         <footer className="mt-10 text-center text-[11px] text-stone-400">
