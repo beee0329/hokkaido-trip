@@ -3,11 +3,13 @@ import {
   Plus, Trash2, Pencil, Eye, Cloud, CloudOff, MapPin, Phone, Check,
   MapPinned, Wallet, Camera, Utensils, ShoppingBag, Train, Bed, MoreHorizontal,
   Navigation, Users, User, ArrowRight, Scale, Banknote, CreditCard, Smartphone,
-  PieChart as PieChartIcon, Loader2, Sparkles, X
+  PieChart as PieChartIcon, Loader2, Sparkles, X,
+  Plane, Hotel, Calendar
 } from 'lucide-react';
 import { doc, onSnapshot, setDoc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
 import { db } from './firebase';
 import { recognizeReceipt } from './gemini';
+import { fetchSapporoForecast } from './weather';
 
 // 房號:你和媽媽用同一個房號就會看到同一份資料
 // 之後若想換新的雲端資料,改這個字串即可(例如改成 'hokkaido_2027')
@@ -151,6 +153,11 @@ const DEFAULT_DATA = {
   expenses: [],
   fxRate: 0.22,
   people: [...PEOPLE],
+  // 預訂資訊:機票和住宿(出發前訂好的)
+  bookings: {
+    flights: [],
+    hotels: [],
+  },
   lastUpdate: Date.now(),
 };
 
@@ -181,12 +188,39 @@ function migrateExpense(e) {
   };
 }
 
+function migrateBookings(raw) {
+  // 確保 bookings 結構存在,舊資料若沒有就給空陣列
+  const b = raw?.bookings || {};
+  return {
+    flights: Array.isArray(b.flights) ? b.flights.map((f) => ({
+      id: f.id || newId(),
+      airline: f.airline || '',
+      flightNo: f.flightNo || '',
+      from: f.from || '',
+      to: f.to || '',
+      departTime: f.departTime || '',
+      arriveTime: f.arriveTime || '',
+      amount: Number(f.amount) || 0,
+      currency: f.currency || 'TWD',
+    })) : [],
+    hotels: Array.isArray(b.hotels) ? b.hotels.map((h) => ({
+      id: h.id || newId(),
+      name: h.name || '',
+      checkIn: h.checkIn || '',
+      checkOut: h.checkOut || '',
+      amount: Number(h.amount) || 0,
+      currency: h.currency || 'TWD',
+    })) : [],
+  };
+}
+
 function migrateData(raw) {
   if (raw?.trip && raw?.days && Array.isArray(raw?.expenses)) {
     return {
       ...raw,
       people: raw.people && raw.people.length === 2 ? raw.people : [...PEOPLE],
       expenses: raw.expenses.map(migrateExpense),
+      bookings: migrateBookings(raw),
     };
   }
   if (raw?.days) {
@@ -214,6 +248,7 @@ function migrateData(raw) {
       expenses: [],
       fxRate: 0.22,
       people: [...PEOPLE],
+      bookings: { flights: [], hotels: [] },
       lastUpdate: Date.now(),
     };
   }
@@ -251,15 +286,15 @@ function relativeTime(ts) {
   return `${Math.floor(diff / 86400)} 天前`;
 }
 
-function EditableText({ value, onCommit, editMode, placeholder, className = '', multiline = false }) {
+function EditableText({ value, onCommit, editMode, placeholder, className = '', multiline = false, style = undefined }) {
   const [draft, setDraft] = useState(value || '');
   useEffect(() => { setDraft(value || ''); }, [value]);
 
   if (!editMode) {
     return value ? (
-      <span className={className}>{value}</span>
+      <span className={className} style={style}>{value}</span>
     ) : placeholder ? (
-      <span className={`${className} opacity-30`}>{placeholder}</span>
+      <span className={`${className} opacity-30`} style={style}>{placeholder}</span>
     ) : null;
   }
 
@@ -274,6 +309,7 @@ function EditableText({ value, onCommit, editMode, placeholder, className = '', 
       placeholder={placeholder}
       rows={1}
       className={`${baseCls} resize-none`}
+      style={style}
     />
   ) : (
     <input
@@ -283,6 +319,7 @@ function EditableText({ value, onCommit, editMode, placeholder, className = '', 
       onBlur={commit}
       placeholder={placeholder}
       className={baseCls}
+      style={style}
     />
   );
 }
@@ -422,11 +459,20 @@ function ItineraryItem({ item, onUpdate, onRemove, editMode, isLast }) {
   );
 }
 
-function DayContent({ day, dayIndex, totalDays, startDate, onUpdate, onAddDay, onRemoveDay, editMode }) {
+function DayContent({ day, dayIndex, totalDays, startDate, onUpdate, onAddDay, onRemoveDay, editMode, weather }) {
   const date = formatDateDM(startDate, dayIndex);
   const weekday = getWeekday(startDate, dayIndex);
   const doneCount = day.items.filter((i) => i.done).length;
   const total = day.items.length;
+
+  // 算出當天日期(YYYY-MM-DD)用來查天氣
+  const dayDateISO = (() => {
+    if (!startDate) return null;
+    const d = new Date(startDate + 'T00:00:00');
+    d.setDate(d.getDate() + dayIndex);
+    return d.toISOString().slice(0, 10);
+  })();
+  const dayWeather = dayDateISO ? weather?.[dayDateISO] : null;
 
   const updateItem = (idx, newItem) => {
     const items = day.items.map((it, i) => (i === idx ? newItem : it));
@@ -456,6 +502,17 @@ function DayContent({ day, dayIndex, totalDays, startDate, onUpdate, onAddDay, o
               {weekday}
             </span>
           )}
+          {/* 札幌天氣:有預報資料才顯示,超過 16 天的日子自然不顯示 */}
+          {dayWeather && (
+            <span
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs tabular-nums"
+              style={{ background: 'var(--brand-primary-bg)', color: 'var(--brand-primary-dark)' }}
+              title={`札幌 · ${dayWeather.label}`}
+            >
+              <span style={{ fontSize: '13px' }}>{dayWeather.icon}</span>
+              {dayWeather.tempMin}°–{dayWeather.tempMax}°
+            </span>
+          )}
           <span className="ml-auto text-xs text-stone-400 tabular-nums">{doneCount}/{total} 完成</span>
         </div>
         <h2 className="text-xl font-medium text-stone-800 tracking-wide" style={{ fontFamily: '"Noto Serif TC", "Source Han Serif TC", serif' }}>
@@ -483,39 +540,33 @@ function DayContent({ day, dayIndex, totalDays, startDate, onUpdate, onAddDay, o
         {editMode && (
           <button
             onClick={addItem}
-            className="w-full mt-3 py-3 rounded-xl text-sm font-medium text-white bg-stone-700 hover:bg-stone-800 active:bg-stone-900 inline-flex items-center justify-center gap-1.5"
+            className="w-full mt-3 py-3 rounded-xl text-sm font-medium text-white inline-flex items-center justify-center gap-1.5 transition-opacity hover:opacity-90 active:opacity-80"
+            style={{ background: 'var(--brand-primary-dark)' }}
           >
             <Plus size={16} /> 新增景點
           </button>
         )}
 
-        <div className="mt-5 pt-4 border-t border-stone-100 flex items-start gap-2 text-sm text-stone-600">
-          <MapPin size={14} className="mt-0.5 shrink-0 text-stone-400" />
-          <div className="flex-1 min-w-0">
-            <EditableText value={day.stay} onCommit={(v) => onUpdate({ ...day, stay: v })} editMode={editMode} placeholder="今晚住宿" />
-            {(day.stayPhone || editMode) && (
-              <div className="text-xs text-stone-400 mt-0.5 flex items-center gap-1">
-                <Phone size={10} />
-                <EditableText value={day.stayPhone} onCommit={(v) => onUpdate({ ...day, stayPhone: v })} editMode={editMode} placeholder="飯店電話" />
-              </div>
-            )}
-            {(day.stayNote || editMode) && (
-              <div className="text-xs text-stone-500 mt-1.5 leading-relaxed">
-                {editMode ? (
-                  <EditableText
-                    value={day.stayNote}
-                    onCommit={(v) => onUpdate({ ...day, stayNote: v })}
-                    editMode={editMode}
-                    placeholder="飯店介紹或網址(選填)"
-                    multiline
-                  />
-                ) : (
-                  <LinkifiedText text={day.stayNote} />
-                )}
-              </div>
-            )}
+        {/* 當日備註(原本「住宿」區塊的 stayNote 改用,放當天的特殊提醒,例如集合地點)
+            stay/stayPhone 已移到「預訂」頁,這裡只保留通用備註 */}
+        {(day.stayNote || editMode) && (
+          <div className="mt-5 pt-4 border-t border-stone-100 flex items-start gap-2 text-xs text-stone-500 leading-relaxed">
+            <Pencil size={11} className="mt-1 shrink-0 text-stone-400" />
+            <div className="flex-1 min-w-0">
+              {editMode ? (
+                <EditableText
+                  value={day.stayNote}
+                  onCommit={(v) => onUpdate({ ...day, stayNote: v })}
+                  editMode={editMode}
+                  placeholder="當日備註(例如集合地點、特別提醒)"
+                  multiline
+                />
+              ) : (
+                <LinkifiedText text={day.stayNote} />
+              )}
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {editMode && (
@@ -557,11 +608,12 @@ function DayTabs({ days, selected, onSelect, startDate, todayIndex }) {
             key={i}
             data-day-tab={i}
             onClick={() => onSelect(i)}
-            className={`shrink-0 px-3 py-1.5 rounded-lg text-center ${active ? 'bg-stone-800 text-white' : 'text-stone-500 hover:bg-stone-100'}`}
+            className={`shrink-0 px-3 py-1.5 rounded-lg text-center ${active ? 'text-white' : 'text-stone-500 hover:bg-stone-100'}`}
+            style={active ? { background: 'var(--brand-primary-dark)' } : undefined}
           >
             <div className="text-xs font-medium leading-tight">
               Day {i + 1}
-              {isToday && <span className={`ml-1 ${active ? 'text-amber-300' : 'text-amber-500'}`}>•</span>}
+              {isToday && <span className="ml-1" style={{ color: active ? '#FFE0EA' : 'var(--brand-accent)' }}>•</span>}
             </div>
             <div className={`text-[10px] tabular-nums leading-tight mt-0.5 ${active ? 'opacity-70' : 'opacity-50'}`}>
               {formatDateDM(startDate, i)}
@@ -833,11 +885,11 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
               共同支出已平攤,不用還
             </div>
           ) : (
-            <div className="rounded-lg p-3" style={{ background: '#FEF7E7' }}>
-              <div className="text-[10px] text-amber-700 mb-1.5">應還金額</div>
+            <div className="rounded-lg p-3" style={{ background: 'var(--brand-accent-bg)' }}>
+              <div className="text-[10px] mb-1.5" style={{ color: 'var(--brand-accent-dark)' }}>應還金額</div>
               <div className="flex items-center justify-center gap-2 text-base font-medium text-stone-800 flex-wrap">
                 <PersonPill person={settlement.from} active size="lg" />
-                <ArrowRight size={16} className="text-amber-600" />
+                <ArrowRight size={16} style={{ color: 'var(--brand-accent)' }} />
                 <PersonPill person={settlement.to} active size="lg" />
                 <span className="tabular-nums ml-1">¥{settlement.amount.toLocaleString()}</span>
               </div>
@@ -856,7 +908,8 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
         <div className="flex gap-1 overflow-x-auto mb-3 pb-1" style={{ scrollbarWidth: 'none' }}>
           <button
             onClick={() => setDay(PRE_TRIP_INDEX)}
-            className={`shrink-0 px-2.5 py-1 rounded-md text-xs ${day === PRE_TRIP_INDEX ? 'bg-stone-800 text-white' : 'bg-stone-50 text-stone-500'}`}
+            className={`shrink-0 px-2.5 py-1 rounded-md text-xs ${day === PRE_TRIP_INDEX ? 'text-white' : 'bg-stone-50 text-stone-500'}`}
+            style={day === PRE_TRIP_INDEX ? { background: 'var(--brand-primary-dark)' } : undefined}
           >
             行前
           </button>
@@ -864,7 +917,8 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
             <button
               key={i}
               onClick={() => setDay(i)}
-              className={`shrink-0 px-2.5 py-1 rounded-md text-xs ${day === i ? 'bg-stone-800 text-white' : 'bg-stone-50 text-stone-500'}`}
+              className={`shrink-0 px-2.5 py-1 rounded-md text-xs ${day === i ? 'text-white' : 'bg-stone-50 text-stone-500'}`}
+              style={day === i ? { background: 'var(--brand-primary-dark)' } : undefined}
             >
               Day {i + 1}
             </button>
@@ -904,16 +958,18 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
               <button
                 onClick={() => setSplitMode('shared')}
                 className={`px-2.5 py-1 rounded-full text-xs font-medium inline-flex items-center gap-1 ${
-                  splitMode === 'shared' ? 'bg-stone-800 text-white' : 'bg-white text-stone-500'
+                  splitMode === 'shared' ? 'text-white' : 'bg-white text-stone-500'
                 }`}
+                style={splitMode === 'shared' ? { background: 'var(--brand-primary-dark)' } : undefined}
               >
                 <Users size={11} /> 共同
               </button>
               <button
                 onClick={() => setSplitMode('personal')}
                 className={`px-2.5 py-1 rounded-full text-xs font-medium inline-flex items-center gap-1 ${
-                  splitMode === 'personal' ? 'bg-stone-800 text-white' : 'bg-white text-stone-500'
+                  splitMode === 'personal' ? 'text-white' : 'bg-white text-stone-500'
                 }`}
+                style={splitMode === 'personal' ? { background: 'var(--brand-primary-dark)' } : undefined}
               >
                 <User size={11} /> 個人
               </button>
@@ -953,13 +1009,15 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
             <div className="flex bg-stone-50 rounded-lg p-0.5 shrink-0">
               <button
                 onClick={() => setCurrency('JPY')}
-                className={`px-2.5 rounded-md text-xs font-medium ${currency === 'JPY' ? 'bg-stone-800 text-white' : 'text-stone-500'}`}
+                className={`px-2.5 rounded-md text-xs font-medium ${currency === 'JPY' ? 'text-white' : 'text-stone-500'}`}
+                style={currency === 'JPY' ? { background: 'var(--brand-primary-dark)' } : undefined}
               >
                 ¥ JPY
               </button>
               <button
                 onClick={() => setCurrency('TWD')}
-                className={`px-2.5 rounded-md text-xs font-medium ${currency === 'TWD' ? 'bg-stone-800 text-white' : 'text-stone-500'}`}
+                className={`px-2.5 rounded-md text-xs font-medium ${currency === 'TWD' ? 'text-white' : 'text-stone-500'}`}
+                style={currency === 'TWD' ? { background: 'var(--brand-primary-dark)' } : undefined}
               >
                 NT$ TWD
               </button>
@@ -1001,12 +1059,17 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={scanning}
-          className="w-full py-2 rounded-lg text-sm font-medium mb-2 border border-dashed border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 disabled:opacity-60 inline-flex items-center justify-center gap-1.5"
+          className="w-full py-2 rounded-lg text-sm font-medium mb-2 border border-dashed disabled:opacity-60 inline-flex items-center justify-center gap-1.5 transition-colors"
+          style={{
+            borderColor: 'var(--brand-accent)',
+            background: 'var(--brand-accent-bg)',
+            color: 'var(--brand-accent-dark)',
+          }}
         >
           {scanning ? (
             <>
               <Loader2 size={14} className="animate-spin" />
-              AI 辨識中,大約 2 秒...
+              AI 辨識中,請稍候...
             </>
           ) : (
             <>
@@ -1027,7 +1090,10 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
         <button
           onClick={submit}
           disabled={!amount || Number(amount) <= 0}
-          className="w-full py-2.5 rounded-lg text-sm font-medium text-white bg-stone-800 hover:bg-stone-900 active:bg-black disabled:bg-stone-300"
+          className="w-full py-2.5 rounded-lg text-sm font-medium text-white disabled:bg-stone-300 transition-colors"
+          style={{
+            background: (!amount || Number(amount) <= 0) ? undefined : 'var(--brand-primary-dark)',
+          }}
         >
           記一筆 + {currency === 'TWD' ? 'NT$' : '¥'}{amount || 0}
         </button>
@@ -1275,8 +1341,9 @@ function AnalyticsView({ data }) {
                 key={opt.id}
                 onClick={() => setRangeFilter(opt.id)}
                 className={`px-2.5 py-1 rounded-full text-xs font-medium ${
-                  rangeFilter === opt.id ? 'bg-stone-800 text-white' : 'bg-stone-50 text-stone-500'
+                  rangeFilter === opt.id ? 'text-white' : 'bg-stone-50 text-stone-500'
                 }`}
+                style={rangeFilter === opt.id ? { background: 'var(--brand-primary-dark)' } : undefined}
               >
                 {opt.label}
               </button>
@@ -1291,8 +1358,9 @@ function AnalyticsView({ data }) {
                 key={opt.id}
                 onClick={() => setPersonFilter(opt.id)}
                 className={`px-2.5 py-1 rounded-full text-xs font-medium ${
-                  personFilter === opt.id ? 'bg-stone-800 text-white' : 'bg-stone-50 text-stone-500'
+                  personFilter === opt.id ? 'text-white' : 'bg-stone-50 text-stone-500'
                 }`}
+                style={personFilter === opt.id ? { background: 'var(--brand-primary-dark)' } : undefined}
               >
                 {opt.label}
               </button>
@@ -1367,16 +1435,347 @@ function AnalyticsView({ data }) {
   );
 }
 
+// ================================================================
+// BookingView:預訂頁(機票 + 住宿)
+// ================================================================
+// 兩個子分頁:Flights / Hotels
+// 編輯模式才能新增/刪除,讀模式只顯示
+// 每張卡用機票存根樣式呈現,讓使用者一眼就看到關鍵資訊
+// ================================================================
+function BookingView({ data, onUpdate, editMode }) {
+  const [tab, setTab] = useState('flights'); // flights | hotels
+  const bookings = data.bookings || { flights: [], hotels: [] };
+
+  // 機票:新增空白筆,使用者直接編輯欄位
+  const addFlight = () => {
+    const newFlight = {
+      id: newId(),
+      airline: '',
+      flightNo: '',
+      from: '',
+      to: '',
+      departTime: '',
+      arriveTime: '',
+      amount: 0,
+      currency: 'TWD',
+    };
+    onUpdate({ ...bookings, flights: [...bookings.flights, newFlight] });
+  };
+  const updateFlight = (id, patch) => {
+    onUpdate({
+      ...bookings,
+      flights: bookings.flights.map((f) => (f.id === id ? { ...f, ...patch } : f)),
+    });
+  };
+  const removeFlight = (id) => {
+    if (!window.confirm('確定要刪除這筆機票紀錄嗎?')) return;
+    onUpdate({ ...bookings, flights: bookings.flights.filter((f) => f.id !== id) });
+  };
+
+  // 住宿
+  const addHotel = () => {
+    const newHotel = {
+      id: newId(),
+      name: '',
+      checkIn: '',
+      checkOut: '',
+      amount: 0,
+      currency: 'TWD',
+    };
+    onUpdate({ ...bookings, hotels: [...bookings.hotels, newHotel] });
+  };
+  const updateHotel = (id, patch) => {
+    onUpdate({
+      ...bookings,
+      hotels: bookings.hotels.map((h) => (h.id === id ? { ...h, ...patch } : h)),
+    });
+  };
+  const removeHotel = (id) => {
+    if (!window.confirm('確定要刪除這筆住宿紀錄嗎?')) return;
+    onUpdate({ ...bookings, hotels: bookings.hotels.filter((h) => h.id !== id) });
+  };
+
+  return (
+    <div className="pb-32 pt-2">
+      {/* 子分頁切換 */}
+      <div className="mb-4 bg-white rounded-2xl p-1 flex shadow-[0_2px_12px_-4px_rgba(0,0,0,0.06)]">
+        <button
+          onClick={() => setTab('flights')}
+          className={`flex-1 py-2.5 rounded-xl text-sm font-medium inline-flex items-center justify-center gap-1.5 transition-colors ${
+            tab === 'flights' ? 'text-white' : 'text-stone-500'
+          }`}
+          style={tab === 'flights' ? { background: 'var(--brand-primary-dark)' } : undefined}
+        >
+          <Plane size={14} /> 機票
+        </button>
+        <button
+          onClick={() => setTab('hotels')}
+          className={`flex-1 py-2.5 rounded-xl text-sm font-medium inline-flex items-center justify-center gap-1.5 transition-colors ${
+            tab === 'hotels' ? 'text-white' : 'text-stone-500'
+          }`}
+          style={tab === 'hotels' ? { background: 'var(--brand-primary-dark)' } : undefined}
+        >
+          <Hotel size={14} /> 住宿
+        </button>
+      </div>
+
+      {/* 機票區塊 */}
+      {tab === 'flights' && (
+        <div className="space-y-3">
+          {bookings.flights.length === 0 && (
+            <div className="text-center text-sm text-stone-400 py-8 bg-white rounded-2xl shadow-[0_2px_12px_-4px_rgba(0,0,0,0.06)]">
+              還沒有機票紀錄{editMode ? '——點下方新增' : ',進入編輯模式新增'}
+            </div>
+          )}
+          {bookings.flights.map((flight) => (
+            <FlightCard
+              key={flight.id}
+              flight={flight}
+              editMode={editMode}
+              onUpdate={(patch) => updateFlight(flight.id, patch)}
+              onRemove={() => removeFlight(flight.id)}
+            />
+          ))}
+          {editMode && (
+            <button
+              onClick={addFlight}
+              className="w-full py-3 rounded-2xl text-sm font-medium text-white inline-flex items-center justify-center gap-1.5 transition-opacity hover:opacity-90 active:opacity-80"
+              style={{ background: 'var(--brand-primary-dark)' }}
+            >
+              <Plus size={16} /> 新增機票
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* 住宿區塊 */}
+      {tab === 'hotels' && (
+        <div className="space-y-3">
+          {bookings.hotels.length === 0 && (
+            <div className="text-center text-sm text-stone-400 py-8 bg-white rounded-2xl shadow-[0_2px_12px_-4px_rgba(0,0,0,0.06)]">
+              還沒有住宿紀錄{editMode ? '——點下方新增' : ',進入編輯模式新增'}
+            </div>
+          )}
+          {bookings.hotels.map((hotel) => (
+            <HotelCard
+              key={hotel.id}
+              hotel={hotel}
+              editMode={editMode}
+              onUpdate={(patch) => updateHotel(hotel.id, patch)}
+              onRemove={() => removeHotel(hotel.id)}
+            />
+          ))}
+          {editMode && (
+            <button
+              onClick={addHotel}
+              className="w-full py-3 rounded-2xl text-sm font-medium text-white inline-flex items-center justify-center gap-1.5 transition-opacity hover:opacity-90 active:opacity-80"
+              style={{ background: 'var(--brand-primary-dark)' }}
+            >
+              <Plus size={16} /> 新增住宿
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 機票卡片:以「登機證」樣式呈現,讓 from → to 視覺最顯眼
+function FlightCard({ flight, editMode, onUpdate, onRemove }) {
+  const currencySymbol = flight.currency === 'JPY' ? '¥' : 'NT$';
+  return (
+    <div className="bg-white rounded-2xl overflow-hidden shadow-[0_2px_12px_-4px_rgba(0,0,0,0.06)]">
+      {/* 上方:航空公司 + 航班 + 刪除 */}
+      <div className="px-4 py-2.5 flex items-center gap-2" style={{ background: 'var(--brand-primary-bg)' }}>
+        <Plane size={14} style={{ color: 'var(--brand-primary-dark)' }} />
+        <EditableText
+          value={flight.airline}
+          onCommit={(v) => onUpdate({ airline: v })}
+          editMode={editMode}
+          placeholder="航空公司"
+          className="text-xs font-medium"
+          style={{ color: 'var(--brand-primary-dark)' }}
+        />
+        <span className="text-stone-300">·</span>
+        <EditableText
+          value={flight.flightNo}
+          onCommit={(v) => onUpdate({ flightNo: v })}
+          editMode={editMode}
+          placeholder="航班"
+          className="text-xs font-medium tracking-wide"
+          style={{ color: 'var(--brand-primary-dark)' }}
+        />
+        {editMode && (
+          <button onClick={onRemove} className="ml-auto text-stone-300 hover:text-rose-500" aria-label="刪除">
+            <Trash2 size={13} />
+          </button>
+        )}
+      </div>
+
+      {/* 中間:起飛 → 抵達 */}
+      <div className="px-4 py-4 flex items-center gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="text-[10px] text-stone-400 mb-0.5">出發</div>
+          <EditableText
+            value={flight.from}
+            onCommit={(v) => onUpdate({ from: v })}
+            editMode={editMode}
+            placeholder="TPE 桃園"
+            className="text-base font-medium text-stone-800 block"
+          />
+          <div className="text-sm text-stone-500 tabular-nums mt-0.5">
+            <EditableText
+              value={flight.departTime}
+              onCommit={(v) => onUpdate({ departTime: v })}
+              editMode={editMode}
+              placeholder="05/30 18:30"
+            />
+          </div>
+        </div>
+        <ArrowRight size={18} style={{ color: 'var(--brand-primary)' }} />
+        <div className="flex-1 min-w-0 text-right">
+          <div className="text-[10px] text-stone-400 mb-0.5">抵達</div>
+          <EditableText
+            value={flight.to}
+            onCommit={(v) => onUpdate({ to: v })}
+            editMode={editMode}
+            placeholder="CTS 新千歲"
+            className="text-base font-medium text-stone-800 block"
+          />
+          <div className="text-sm text-stone-500 tabular-nums mt-0.5">
+            <EditableText
+              value={flight.arriveTime}
+              onCommit={(v) => onUpdate({ arriveTime: v })}
+              editMode={editMode}
+              placeholder="05/30 23:00"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* 底部:金額 */}
+      <div className="border-t border-dashed border-stone-200 px-4 py-2.5 flex items-center justify-between">
+        <span className="text-[10px] text-stone-400">金額</span>
+        {editMode ? (
+          <div className="flex items-center gap-1.5">
+            <select
+              value={flight.currency}
+              onChange={(e) => onUpdate({ currency: e.target.value })}
+              className="text-xs bg-stone-50 rounded px-1 py-0.5"
+            >
+              <option value="TWD">NT$</option>
+              <option value="JPY">¥</option>
+            </select>
+            <input
+              type="number"
+              value={flight.amount || ''}
+              onChange={(e) => onUpdate({ amount: Number(e.target.value) || 0 })}
+              placeholder="金額"
+              className="w-24 text-right text-sm bg-stone-50 rounded px-2 py-1 tabular-nums focus:outline-none"
+            />
+          </div>
+        ) : (
+          <span className="text-sm font-medium tabular-nums text-stone-800">
+            {currencySymbol} {(flight.amount || 0).toLocaleString()}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// 住宿卡片
+function HotelCard({ hotel, editMode, onUpdate, onRemove }) {
+  const currencySymbol = hotel.currency === 'JPY' ? '¥' : 'NT$';
+  return (
+    <div className="bg-white rounded-2xl overflow-hidden shadow-[0_2px_12px_-4px_rgba(0,0,0,0.06)]">
+      <div className="px-4 py-2.5 flex items-center gap-2" style={{ background: 'var(--brand-accent-bg)' }}>
+        <Hotel size={14} style={{ color: 'var(--brand-accent-dark)' }} />
+        <EditableText
+          value={hotel.name}
+          onCommit={(v) => onUpdate({ name: v })}
+          editMode={editMode}
+          placeholder="飯店名稱"
+          className="text-sm font-medium flex-1"
+          style={{ color: 'var(--brand-accent-dark)' }}
+        />
+        {editMode && (
+          <button onClick={onRemove} className="text-stone-300 hover:text-rose-500 shrink-0" aria-label="刪除">
+            <Trash2 size={13} />
+          </button>
+        )}
+      </div>
+
+      <div className="px-4 py-4 flex items-center gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="text-[10px] text-stone-400 mb-0.5 flex items-center gap-1">
+            <Calendar size={9} /> 入住
+          </div>
+          <EditableText
+            value={hotel.checkIn}
+            onCommit={(v) => onUpdate({ checkIn: v })}
+            editMode={editMode}
+            placeholder="2026-05-30"
+            className="text-sm text-stone-700 tabular-nums"
+          />
+        </div>
+        <ArrowRight size={16} style={{ color: 'var(--brand-accent)' }} />
+        <div className="flex-1 min-w-0 text-right">
+          <div className="text-[10px] text-stone-400 mb-0.5 flex items-center gap-1 justify-end">
+            <Calendar size={9} /> 退住
+          </div>
+          <EditableText
+            value={hotel.checkOut}
+            onCommit={(v) => onUpdate({ checkOut: v })}
+            editMode={editMode}
+            placeholder="2026-06-01"
+            className="text-sm text-stone-700 tabular-nums"
+          />
+        </div>
+      </div>
+
+      <div className="border-t border-dashed border-stone-200 px-4 py-2.5 flex items-center justify-between">
+        <span className="text-[10px] text-stone-400">金額</span>
+        {editMode ? (
+          <div className="flex items-center gap-1.5">
+            <select
+              value={hotel.currency}
+              onChange={(e) => onUpdate({ currency: e.target.value })}
+              className="text-xs bg-stone-50 rounded px-1 py-0.5"
+            >
+              <option value="TWD">NT$</option>
+              <option value="JPY">¥</option>
+            </select>
+            <input
+              type="number"
+              value={hotel.amount || ''}
+              onChange={(e) => onUpdate({ amount: Number(e.target.value) || 0 })}
+              placeholder="金額"
+              className="w-24 text-right text-sm bg-stone-50 rounded px-2 py-1 tabular-nums focus:outline-none"
+            />
+          </div>
+        ) : (
+          <span className="text-sm font-medium tabular-nums text-stone-800">
+            {currencySymbol} {(hotel.amount || 0).toLocaleString()}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
 function StatusPill({ status }) {
+  // 用 inline style 配合主題色,因為 Tailwind 沒有對應的 brand-* class
   const map = {
-    loading: { icon: <Cloud size={12} />, text: '連線中', cls: 'text-stone-400' },
-    saving: { icon: <Cloud size={12} className="animate-pulse" />, text: '儲存中', cls: 'text-amber-600' },
-    synced: { icon: <Cloud size={12} />, text: '已同步', cls: 'text-emerald-600' },
-    offline: { icon: <CloudOff size={12} />, text: '離線', cls: 'text-rose-500' },
+    loading: { icon: <Cloud size={12} />, text: '連線中', style: { color: '#9CA3AF' } },
+    saving: { icon: <Cloud size={12} className="animate-pulse" />, text: '儲存中', style: { color: 'var(--brand-accent-dark)' } },
+    synced: { icon: <Cloud size={12} />, text: '已同步', style: { color: 'var(--brand-primary-dark)' } },
+    offline: { icon: <CloudOff size={12} />, text: '離線', style: { color: '#E11D48' } },
   };
   const s = map[status] || map.loading;
   return (
-    <div className={`text-xs flex items-center gap-1 shrink-0 ${s.cls}`}>
+    <div className="text-xs flex items-center gap-1 shrink-0" style={s.style}>
       {s.icon}
       {s.text}
     </div>
@@ -1386,6 +1785,7 @@ function StatusPill({ status }) {
 function BottomNav({ view, onChange, editMode, onToggleEdit }) {
   const tabs = [
     { id: 'itinerary', label: '行程', icon: MapPinned },
+    { id: 'booking', label: '預訂', icon: Plane },
     { id: 'expense', label: '記帳', icon: Wallet },
     { id: 'analytics', label: '分析', icon: PieChartIcon },
   ];
@@ -1421,7 +1821,19 @@ export default function App() {
   const [editMode, setEditMode] = useState(false);
   const [status, setStatus] = useState('loading');
   const [, forceTick] = useState(0);
+  // 天氣預報 by date(YYYY-MM-DD → { tempMax, tempMin, label, icon })
+  const [weather, setWeather] = useState({});
   const saveTimer = useRef(null);
+
+  // 抓札幌天氣預報(startDate 變動時重抓)
+  useEffect(() => {
+    if (!data.trip.startDate || !data.days?.length) return;
+    let cancelled = false;
+    fetchSapporoForecast(data.trip.startDate, data.days.length).then((result) => {
+      if (!cancelled) setWeather(result);
+    });
+    return () => { cancelled = true; };
+  }, [data.trip.startDate, data.days.length]);
 
   useEffect(() => {
     if (document.getElementById('hk-fonts')) return;
@@ -1595,6 +2007,8 @@ export default function App() {
       });
   };
   const updateFx = (rate) => saveData({ ...data, fxRate: rate });
+  // 預訂(機票/住宿)的更新都走整份覆蓋,因為一次編輯一筆且資料量小,不需 arrayUnion
+  const updateBookings = (newBookings) => saveData({ ...data, bookings: newBookings });
 
   const todayIndex = getDayIndex(data.trip.startDate);
   const inTrip = todayIndex >= 0 && todayIndex < data.days.length;
@@ -1637,8 +2051,8 @@ export default function App() {
           </div>
 
           {inTrip && !editMode && (
-            <div className="mt-3 text-xs tracking-[0.15em] text-amber-700 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full" style={{ background: '#FAEEDA' }}>
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+            <div className="mt-3 text-xs tracking-[0.15em] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full" style={{ background: 'var(--brand-accent-bg)', color: 'var(--brand-accent-dark)' }}>
+              <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: 'var(--brand-accent)' }} />
               旅程進行中 · Day {todayIndex + 1}
             </div>
           )}
@@ -1654,6 +2068,7 @@ export default function App() {
             onAddDay={addDay}
             onRemoveDay={() => removeDay(selectedDay)}
             editMode={editMode}
+            weather={weather}
           />
         )}
         {view === 'expense' && (
@@ -1661,6 +2076,9 @@ export default function App() {
         )}
         {view === 'analytics' && (
           <AnalyticsView data={data} />
+        )}
+        {view === 'booking' && (
+          <BookingView data={data} onUpdate={updateBookings} editMode={editMode} />
         )}
 
         <footer className="mt-10 text-center text-[11px] text-stone-400">
