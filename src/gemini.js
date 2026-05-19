@@ -5,18 +5,22 @@
 // (店家、品項、金額、類別)。
 //
 // 安全性備註(for reviewer):
-// 此 API key 在 Google AI Studio 設定為「免費方案」(Free Tier),
-// 無綁定信用卡,意即即使被濫用最差情況是被擋下而不會產生費用。
-// 因為本專案僅供兩人共用、無公開推廣,流量極低,故直接內嵌於前端。
-// 如未來流量上升或需更高安全性,可改走後端代理(如 Vercel Edge Function)。
+// API key 透過 Vite 環境變數 VITE_GEMINI_API_KEY 在 build 時注入,
+// 設定於 Vercel Dashboard → Settings → Environment Variables。
+// 變數本身仍會出現在最終 bundle 中(因為這是純前端 app),但至少
+// 不會出現在 GitHub 公開 repo 的程式碼裡,避免 Google 自動偵測撤銷。
 //
-// 防呆機制(2026/05/19 新增):
+// 如未來流量上升或需更高安全性,可改走後端代理(如 Vercel Edge Function)
+// 把 key 完全保留在伺服器端,前端只發內部 endpoint。
+//
+// 防呆機制:
 // 1. 圖片超過 4MB 或單邊 > 2048px 自動壓縮,避免 timeout / internal error
 // 2. 5xx 錯誤自動重試 2 次,指數退避(1.5s → 3s)
 // 3. 錯誤訊息翻成中文且帶下一步建議
+// 4. 未設定環境變數時跳明確錯誤訊息,而不是 silent fail
 // ================================================================
 
-const GEMINI_API_KEY = 'AIzaSyBhSKX1HL5vbHbcwx7McCtoKkfE0rjg-V0';
+const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 const GEMINI_MODEL = 'gemini-2.5-flash';
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
@@ -254,6 +258,10 @@ async function callGeminiWithRetry(inlineData) {
  */
 export async function recognizeReceipt(imageFile) {
   if (!imageFile) throw new Error('沒有提供圖片');
+  // 環境變數沒設(例如 Vercel 沒設 VITE_GEMINI_API_KEY)時跳明確錯誤
+  if (!GEMINI_API_KEY) {
+    throw new Error('辨識服務未設定,請聯絡開發者(VITE_GEMINI_API_KEY)');
+  }
 
   // 1. 圖片預處理(過大則壓縮)
   const inlineData = await fileToInlineData(imageFile);
