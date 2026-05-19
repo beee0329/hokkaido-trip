@@ -676,7 +676,7 @@ function PersonPill({ person, active, onClick, size = 'sm' }) {
   );
 }
 
-function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
+function ExpenseView({ data, onAdd, onRemove, onUpdate, onUpdateFx, editMode }) {
   const [day, setDay] = useState(0);
   const [category, setCategory] = useState('餐點');
   const [paidBy, setPaidBy] = useState(PEOPLE[0]);
@@ -1111,6 +1111,8 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
           const preTripExps = data.expenses.filter((e) => e.dayIndex === PRE_TRIP_INDEX).sort((a, b) => b.createdAt - a.createdAt);
 
           // 渲染單一筆記帳的小函式(行前和 Day N 共用)
+          // 讀模式:tag + 備註 + 金額 + 刪除,備註不截斷允許換行
+          // 編輯模式:同樣呈現 tag,但金額和備註變成可點擊編輯的欄位
           const renderExpRow = (exp) => {
             const cat = CATEGORIES[exp.category];
             const isFirst = exp.paidBy === people[0];
@@ -1119,49 +1121,95 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
             const pm = PAY_METHODS[exp.payMethod || 'cash'];
             const PmIcon = pm.icon;
             const isTWD = exp.currency === 'TWD';
+
+            // 在編輯模式下調整金額時,需要同步更新「原始幣別金額」和「換算後日幣金額」
+            // 簡化邏輯:使用者改的就是「他原本輸入的幣別」的數字
+            // amount(內部日幣)依當下匯率重新換算
+            const handleAmountChange = (newOriginal) => {
+              const n = Number(newOriginal) || 0;
+              const fx = exp.fxAtEntry || data.fxRate || 0.22;
+              const newJpy = exp.currency === 'TWD' ? Math.round(n / fx) : Math.round(n);
+              onUpdate(exp.id, { originalAmount: n, amount: newJpy });
+            };
+
             return (
-              <div key={exp.id} className="flex items-center gap-2 flex-wrap">
-                <span className="w-2 h-2 rounded-full shrink-0" style={{ background: cat.dot }} />
-                <span className="text-xs px-1.5 py-0.5 rounded font-medium shrink-0" style={{ background: cat.bg, color: cat.color }}>
-                  {exp.category}
-                </span>
-                <span
-                  className="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 inline-flex items-center gap-0.5"
-                  style={{ background: personBg, color: personColor }}
-                >
-                  <User size={9} strokeWidth={2.4} />
-                  {exp.paidBy || people[0]}
-                </span>
-                <span
-                  className="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 inline-flex items-center gap-0.5"
-                  style={{ background: pm.bg, color: pm.color }}
-                  title={pm.label}
-                >
-                  <PmIcon size={9} strokeWidth={2.4} />
-                  {pm.label}
-                </span>
-                {exp.splitMode === 'shared' ? (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 inline-flex items-center gap-0.5 bg-stone-100 text-stone-600">
-                    <Users size={9} strokeWidth={2.4} />
-                    共同
+              <div key={exp.id} className="space-y-1.5">
+                {/* 第一行:所有 tag + 刪除按鈕 */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: cat.dot }} />
+                  <span className="text-xs px-1.5 py-0.5 rounded font-medium shrink-0" style={{ background: cat.bg, color: cat.color }}>
+                    {exp.category}
                   </span>
-                ) : (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 bg-stone-50 text-stone-400">
-                    個人
+                  <span
+                    className="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 inline-flex items-center gap-0.5"
+                    style={{ background: personBg, color: personColor }}
+                  >
+                    <User size={9} strokeWidth={2.4} />
+                    {exp.paidBy || people[0]}
                   </span>
-                )}
-                <span className="text-sm text-stone-700 flex-1 min-w-0 truncate">{exp.note || '—'}</span>
-                <div className="text-right shrink-0">
-                  <div className="text-sm tabular-nums text-stone-700 font-medium">
-                    {isTWD ? `NT$${(exp.originalAmount || 0).toLocaleString()}` : `¥${exp.amount.toLocaleString()}`}
-                  </div>
-                  {isTWD && (
-                    <div className="text-[10px] text-stone-400 tabular-nums">≈ ¥{exp.amount.toLocaleString()}</div>
+                  <span
+                    className="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 inline-flex items-center gap-0.5"
+                    style={{ background: pm.bg, color: pm.color }}
+                    title={pm.label}
+                  >
+                    <PmIcon size={9} strokeWidth={2.4} />
+                    {pm.label}
+                  </span>
+                  {exp.splitMode === 'shared' ? (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 inline-flex items-center gap-0.5 bg-stone-100 text-stone-600">
+                      <Users size={9} strokeWidth={2.4} />
+                      共同
+                    </span>
+                  ) : (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 bg-stone-50 text-stone-400">
+                      個人
+                    </span>
+                  )}
+                  {/* 金額:讀模式顯示文字,編輯模式可改 */}
+                  {!editMode ? (
+                    <div className="ml-auto text-right shrink-0">
+                      <div className="text-sm tabular-nums text-stone-700 font-medium">
+                        {isTWD ? `NT$${(exp.originalAmount || 0).toLocaleString()}` : `¥${exp.amount.toLocaleString()}`}
+                      </div>
+                      {isTWD && (
+                        <div className="text-[10px] text-stone-400 tabular-nums">≈ ¥{exp.amount.toLocaleString()}</div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="ml-auto flex items-center gap-1 shrink-0">
+                      <span className="text-[10px] text-stone-400">{isTWD ? 'NT$' : '¥'}</span>
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        value={exp.originalAmount || ''}
+                        onChange={(e) => handleAmountChange(e.target.value)}
+                        className="w-20 text-right text-sm tabular-nums bg-stone-50 rounded px-1.5 py-0.5 focus:outline-none focus:bg-stone-100"
+                      />
+                    </div>
+                  )}
+                  {/* 刪除按鈕(只在編輯模式顯示,避免讀模式時誤觸) */}
+                  {editMode && (
+                    <button onClick={() => onRemove(exp.id)} className="text-stone-300 hover:text-rose-500 shrink-0" aria-label="刪除">
+                      <Trash2 size={12} />
+                    </button>
                   )}
                 </div>
-                <button onClick={() => onRemove(exp.id)} className="text-stone-300 hover:text-rose-500" aria-label="刪除">
-                  <Trash2 size={12} />
-                </button>
+                {/* 第二行:備註(完整顯示不截斷,編輯模式可改) */}
+                {(exp.note || editMode) && (
+                  <div className="text-xs text-stone-500 pl-3.5 leading-relaxed whitespace-pre-wrap break-words">
+                    {editMode ? (
+                      <EditableText
+                        value={exp.note || ''}
+                        onCommit={(v) => onUpdate(exp.id, { note: v })}
+                        editMode={true}
+                        placeholder="備註(店家、品項、訂位號…)"
+                        multiline
+                      />
+                    ) : (
+                      exp.note
+                    )}
+                  </div>
+                )}
               </div>
             );
           };
@@ -1179,7 +1227,7 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
                     </div>
                     <span className="text-sm tabular-nums text-stone-600 font-medium">¥{preTripTotal.toLocaleString()}</span>
                   </div>
-                  <div className="space-y-2">{preTripExps.map(renderExpRow)}</div>
+                  <div className="space-y-3">{preTripExps.map(renderExpRow)}</div>
                 </div>
               )}
 
@@ -1196,7 +1244,7 @@ function ExpenseView({ data, onAdd, onRemove, onUpdateFx }) {
                       </div>
                       <span className="text-sm tabular-nums text-stone-600 font-medium">¥{dayTotals[di].toLocaleString()}</span>
                     </div>
-                    <div className="space-y-2">{dayExps.map(renderExpRow)}</div>
+                    <div className="space-y-3">{dayExps.map(renderExpRow)}</div>
                   </div>
                 );
               })}
@@ -2011,6 +2059,12 @@ export default function App() {
         setStatus('offline');
       });
   };
+  // 編輯單筆記帳:Firestore 沒有「陣列中按 id 找物件改欄位」的原子操作,
+  // 所以用整份覆寫。兩人同時編輯不同筆會有最後寫入勝,但實際使用很少同時編輯,可接受。
+  const updateExpense = (id, patch) => {
+    const newExpenses = data.expenses.map((e) => (e.id === id ? { ...e, ...patch } : e));
+    saveData({ ...data, expenses: newExpenses });
+  };
   const updateFx = (rate) => saveData({ ...data, fxRate: rate });
   // 預訂(機票/住宿)的更新都走整份覆蓋,因為一次編輯一筆且資料量小,不需 arrayUnion
   const updateBookings = (newBookings) => saveData({ ...data, bookings: newBookings });
@@ -2077,7 +2131,14 @@ export default function App() {
           />
         )}
         {view === 'expense' && (
-          <ExpenseView data={data} onAdd={addExpense} onRemove={removeExpense} onUpdateFx={updateFx} />
+          <ExpenseView
+            data={data}
+            onAdd={addExpense}
+            onRemove={removeExpense}
+            onUpdate={updateExpense}
+            onUpdateFx={updateFx}
+            editMode={editMode}
+          />
         )}
         {view === 'analytics' && (
           <AnalyticsView data={data} />
