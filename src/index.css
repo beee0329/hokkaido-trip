@@ -20,3 +20,16 @@ body {
   -webkit-font-smoothing: antialiased;
   background: var(--brand-bg);
 }
+
+/* 防止 iOS Safari 在 input 聚焦時自動縮放畫面
+   觸發條件:input/textarea 的 font-size 小於 16px
+   解法:強制視覺上維持原本 Tailwind 給的字體大小,
+   但在手機(<640px)時 input 字體至少 16px
+   作法:用 max() 確保最小 16px,桌機照原本顯示 */
+@media (max-width: 640px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
