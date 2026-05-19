@@ -66,12 +66,16 @@ export async function fetchSapporoForecast(startDate, days = 7) {
   }
 
   // 計算需要的日期清單,後續從 API 回傳裡篩
+  // ⚠️ 用本地時區組日期字串,避免 toISOString() 在 UTC+ 時區把日期推前一天
   const wantedDates = new Set();
-  const start = new Date(startDate);
+  const start = new Date(startDate + 'T00:00:00'); // 明確指定本地午夜,而非 UTC
   for (let i = 0; i < days; i++) {
     const d = new Date(start);
     d.setDate(d.getDate() + i);
-    wantedDates.add(d.toISOString().slice(0, 10));
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    wantedDates.add(`${yyyy}-${mm}-${dd}`);
   }
 
   const params = new URLSearchParams({
